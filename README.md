@@ -1,6 +1,6 @@
 # Image Review Annotator
 
-“审图打点”是本地优先的图片审阅 Web 工作台。当前已实现 P0–P1 工程骨架：Vue 状态页、Express API、SQLite 初始化和开发/生产启动。图片标注功能尚未实现。
+“审图打点”是本地优先的图片审阅 Web 工作台。P0–P2 已由用户确认完成；P3 已实现单图多标记、独立展开收起、编辑删除、缩放滚动、列表定位和标记大小调节，待用户页面验收。内容仅保留在浏览器当前标签页会话中，同标签页刷新可恢复；普通关闭后新开不恢复，尚未上传或正式保存。
 
 产品定位：本地优先、可在可信局域网共享的图片审阅 Web 工作台。
 
@@ -23,7 +23,7 @@
 - [V1 产品与技术方案](docs/v1-plan.md)：待对齐的交互规则、技术细化、接口草案和路线图
 - [开发与 Git 流程](docs/development.md)：spec、阶段推进、测试验收和 Git 约束
 - [提交说明](docs/submission.md)
-- [测试入口与覆盖范围](tests/README.md)、[手动测试集合](tests/manual/p0-p1.md)
+- [测试入口与覆盖范围](tests/README.md)、[P3 验收计划](tests/manual/p3.md)、[P2 回归](tests/manual/p2.md)、[P0–P1 回归](tests/manual/p0-p1.md)
 - [协作约束](AGENTS.md)
 
 本地开发记录写在被 Git 忽略的 `workspace/` 目录：
@@ -90,13 +90,13 @@ npm test
 npm run build
 ```
 
-测试代码、配置、覆盖范围和手动集合统一放在 [tests/](tests/README.md)。自动测试数据在 `tests/.tmp/`，测试结束自动清理，不接触默认用户数据。不使用浏览器自动化验证；页面交互与视觉验收按[手动测试集合](tests/manual/p0-p1.md)由用户执行。
+测试代码、配置、覆盖范围和手动集合统一放在 [tests/](tests/README.md)。自动测试数据在 `tests/.tmp/`，测试结束自动清理。不使用浏览器自动化验证；P3 页面交互与视觉验收由用户按 [P3 手动集合](tests/manual/p3.md)执行。默认端口自动用例需要 3002/5174 空闲，当前占用导致该项受阻；其余回归结果见测试入口。
 
 `GET /api/health` 返回 `{"status":"ok"}`；`GET /api/ready` 真实检查 SQLite 查询和目录写入/清理。错误为 `{error:{code,message,requestId}}`，带对应 X-Request-Id，未知 API 返回 JSON 404。请求日志隐藏查询参数及未知路径内容。
 
 ## 当前状态
 
-2026-10-25：P0–P1 已实现；实现记录保留在本地完成 spec，[测试入口](tests/README.md)统一维护覆盖范围、结果及手动集合。整体阶段计划见 docs/v1-plan.md。尚不支持上传、查看图片、标记、昵称或协作；`repro:invalid-annotation` 留到业务接口阶段实现，当前没有占位成功脚本。Windows 为实机验证范围，macOS/Linux 仅覆盖路径逻辑。提交与推送按用户授权进行。
+2026-10-25：spec1、spec2 / P2 已由用户确认完成；P3 已获授权并实现，spec3 留在 active 等待用户手动验收。lint/typecheck/build 通过；最终 npm test 为 68 通过、1 因固定端口占用失败，不能记为全量通过。整体计划见 docs/v1-plan.md，详细证据见 [测试入口](tests/README.md)。尚不支持上传、服务端正式保存、跨标签页/服务重启恢复、昵称或协作；`repro:invalid-annotation` 留到业务接口阶段实现。Windows 为实机验证范围，macOS/Linux 仅覆盖路径逻辑。未 commit/push。
 
 ## 目录职责
 
