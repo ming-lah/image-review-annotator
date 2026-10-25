@@ -12,13 +12,13 @@ export function defaultDataDir(platform = process.platform, env = process.env, h
 }
 
 export function readConfig(env = process.env) {
-  const portText = env.PORT ?? '3000';
+  const portText = env.PORT ?? '3002';
   if (!/^\d+$/.test(portText) || Number(portText) < 1 || Number(portText) > 65535) {
-    throw new StartupError('INVALID_PORT', 'PORT 必须为 1–65535 的整数');
+    throw new StartupError('INVALID_PORT', 'PORT must be an integer between 1 and 65535');
   }
   const dataDir = env.DATA_DIR ?? defaultDataDir(process.platform, env);
-  if (!path.isAbsolute(dataDir)) throw new StartupError('INVALID_DATA_DIR', 'DATA_DIR 必须是绝对路径');
+  if (!path.isAbsolute(dataDir)) throw new StartupError('INVALID_DATA_DIR', 'DATA_DIR must be an absolute path');
   const host = env.HOST ?? '127.0.0.1';
-  if (!host.trim()) throw new StartupError('INVALID_HOST', 'HOST 不能为空');
+  if (!host.trim()) throw new StartupError('INVALID_HOST', 'HOST must not be empty');
   return { host, port: Number(portText), dataDir };
 }

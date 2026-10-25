@@ -12,6 +12,17 @@ async function assertFree(port: number) {
   await new Promise<void>(resolve => server.close(() => resolve()));
 }
 describe('development supervisor', () => {
+  it('uses API 3002 and frontend 5174 by default, including the API proxy', async () => {
+    const proc = launch(['scripts/dev.mjs'], { DATA_DIR: tempDir(), PORT: undefined, VITE_PORT: undefined, HOST: '127.0.0.1', NODE_ENV: 'development' });
+    try {
+      await waitFor('http://127.0.0.1:5174/api/ready', proc.output);
+      expect(await (await fetch('http://127.0.0.1:5174/api/ready')).json()).toEqual({ status: 'ready' });
+      expect(await (await fetch('http://127.0.0.1:3002/api/health')).json()).toEqual({ status: 'ok' });
+    } finally { await proc.stop(); }
+    expect(await proc.exited).toBe(0);
+    await assertFree(3002);
+    await assertFree(5174);
+  });
   it('serves page and proxied ready, stops both children and releases ports', async () => {
     const apiPort = await freePort();
     const uiPort = await freePort();
@@ -38,6 +49,7 @@ describe('development supervisor', () => {
       expect(code).toBe(1);
       expect(proc.output()).toContain(target === 'api' ? 'PORT_IN_USE' : 'FRONTEND_PORT_IN_USE');
       expect(proc.output()).not.toContain(process.cwd());
+      expect([...proc.output()].every(character => character.charCodeAt(0) < 128)).toBe(true);
     } finally {
       await proc.stop();
       await new Promise<void>(resolve => blocker.close(() => resolve()));

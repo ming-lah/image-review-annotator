@@ -1,9 +1,9 @@
 import { createServer } from 'vite';
 const log = (level, fields) => console.log(JSON.stringify({ timestamp: new Date().toISOString(), level, ...fields }));
 
-const portText = process.env.VITE_PORT ?? '5173';
+const portText = process.env.VITE_PORT ?? '5174';
 if (!/^\d+$/.test(portText) || Number(portText) < 1 || Number(portText) > 65535) {
-  log('error', { event: 'startup_failed', errorCode: 'INVALID_VITE_PORT', message: 'VITE_PORT 必须为 1–65535 的整数' });
+  log('error', { event: 'startup_failed', errorCode: 'INVALID_VITE_PORT', message: 'VITE_PORT must be an integer between 1 and 65535' });
   process.exitCode = 1;
   process.disconnect?.();
 } else {
@@ -25,7 +25,7 @@ if (!/^\d+$/.test(portText) || Number(portText) < 1 || Number(portText) > 65535)
     process.on('message', message => { if (message === 'shutdown') void stop(); });
   } catch (error) {
     await server?.close();
-    log('error', { event: 'startup_failed', errorCode: error.message.includes('Port') ? 'FRONTEND_PORT_IN_USE' : 'FRONTEND_START_FAILED', message: '前端启动失败，请检查 VITE_PORT、配置和依赖' });
+    log('error', { event: 'startup_failed', errorCode: error.message.includes('Port') ? 'FRONTEND_PORT_IN_USE' : 'FRONTEND_START_FAILED', port: Number(portText), message: 'Frontend startup failed. Check VITE_PORT, configuration and dependencies.' });
     process.exitCode = 1;
     process.disconnect?.();
   }

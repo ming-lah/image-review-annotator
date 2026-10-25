@@ -40,16 +40,16 @@ export function migrate(db: Database.Database, directory: string) {
 
 export function openStorage(dataDir: string, migrations = fileURLToPath(new URL(import.meta.url.endsWith('.ts') ? '../../migrations/' : '../migrations/', import.meta.url))) {
   try { fs.mkdirSync(dataDir, { recursive: true }); checkDirectory(dataDir); }
-  catch { throw new StartupError('DATA_DIRECTORY_UNAVAILABLE', '数据目录创建或写入失败，请检查 DATA_DIR 和权限'); }
+  catch { throw new StartupError('DATA_DIRECTORY_UNAVAILABLE', 'Cannot create or write the data directory. Check DATA_DIR and permissions.'); }
   let db: Database.Database;
   try { db = new Database(path.join(dataDir, 'app.db')); }
-  catch { throw new StartupError('DATABASE_OPEN_FAILED', '数据库打开失败，请检查数据库文件和权限'); }
+  catch { throw new StartupError('DATABASE_OPEN_FAILED', 'Cannot open the database. Check the database file and permissions.'); }
   try {
     db.pragma('journal_mode = WAL');
     db.pragma('foreign_keys = ON');
     db.pragma('busy_timeout = 5000');
     try { migrate(db, migrations); }
-    catch { throw new StartupError('MIGRATION_FAILED', '数据库迁移失败，请检查迁移文件和数据库版本'); }
+    catch { throw new StartupError('MIGRATION_FAILED', 'Database migration failed. Check migration files and the database version.'); }
     return { db, checkReady() { db.prepare('SELECT 1').get(); checkDirectory(dataDir); }, close() { db.close(); } };
   } catch (error) { db.close(); throw error; }
 }

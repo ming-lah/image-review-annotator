@@ -43,6 +43,6 @@ describe('real SQLite storage', () => {
     fs.writeFileSync(file, 'SELECT 1;');
     openStorage(root, migrations).close();
     fs.writeFileSync(file, 'SELECT 2;');
-    expect(() => openStorage(root, migrations)).toThrow('迁移失败');
+    expect(() => openStorage(root, migrations)).toThrow('migration failed');
   });
 });

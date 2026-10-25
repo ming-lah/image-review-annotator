@@ -13,6 +13,7 @@ describe('startup and shutdown', () => {
     const proc = launch(entry, { ...env, NODE_ENV: 'development' });
     expect(await proc.exited).toBe(1);
     expect(proc.output()).toContain(code);
+    expect([...proc.output()].every(character => character.charCodeAt(0) < 128)).toBe(true);
   });
   it('rejects a file used as DATA_DIR without exposing its path', async () => {
     const file = path.join(tempDir(), 'blocked');
@@ -41,6 +42,8 @@ describe('startup and shutdown', () => {
       const failed = launch(entry, env);
       expect(await failed.exited).toBe(1);
       expect(failed.output()).toContain('PORT_IN_USE');
+      expect(failed.output()).toContain(`API port ${port} is already in use`);
+      expect([...failed.output()].every(character => character.charCodeAt(0) < 128)).toBe(true);
     } finally { await new Promise<void>(resolve => blocker.close(() => resolve())); }
     for (let i = 0; i < 2; i++) {
       const proc = launch(entry, env);

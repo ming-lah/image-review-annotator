@@ -47,7 +47,7 @@ npm ci
 npm run dev
 ```
 
-开发页面：[http://127.0.0.1:5173](http://127.0.0.1:5173)，后端默认 127.0.0.1:3000；Vite 代理 `/api`。任一进程启动失败时共同退出，Ctrl+C 关闭两端。修改后端代码后需重启开发命令。
+开发页面：[http://127.0.0.1:5174](http://127.0.0.1:5174)，后端默认 127.0.0.1:3002；Vite 代理 `/api`。任一进程启动失败时共同退出，Ctrl+C 关闭两端。修改后端代码后需重启开发命令。
 
 生产模式：
 
@@ -56,28 +56,30 @@ npm run build
 npm run start
 ```
 
-生产只运行 Node，在 [http://127.0.0.1:3000](http://127.0.0.1:3000) 同源提供页面与 API，不需要 Vite。缺少构建时返回 BUILD_MISSING 并非零退出。
+生产只运行 Node，在 [http://127.0.0.1:3002](http://127.0.0.1:3002) 同源提供页面与 API，不需要 Vite。缺少构建时返回 BUILD_MISSING 并非零退出。
 
 配置（环境变量）：
 
 | 变量 | 默认值与约束 |
 |---|---|
 | HOST | 127.0.0.1；可显式设为 0.0.0.0，局域网实机验收留待后续阶段 |
-| PORT | 3000；1–65535 整数；开发代理跟随该值 |
-| VITE_PORT | 5173；仅开发前端使用，端口冲突时失败，不自动换端口 |
+| PORT | 3002；1–65535 整数；开发代理跟随该值 |
+| VITE_PORT | 5174；仅开发前端使用，端口冲突时失败，不自动换端口 |
 | DATA_DIR | 绝对路径；未设置时使用系统应用数据目录 |
 
 Windows 默认数据目录为 `%LOCALAPPDATA%/ImageReviewAnnotator`，macOS 为 `~/Library/Application Support/ImageReviewAnnotator`，Linux 为 `$XDG_DATA_HOME/ImageReviewAnnotator`（未设置时 `~/.local/share/ImageReviewAnnotator`）。不回退到临时库。数据库仅有迁移表，暂无业务表。
 
-若 3000 已被占用，可在 PowerShell 中显式选择其他端口（本次验证机器的 3000 被 Claude Code Manager 占用）：
+默认端口固定为后端 3002、开发前端 5174，避开此前的端口冲突。旧终端可能仍保留 PORT=3102 等配置，使用新默认值前先清除旧覆盖；不需要修改全局终端设置：
 
 ```powershell
-$env:PORT = '3102'
+Remove-Item Env:PORT,Env:VITE_PORT -ErrorAction SilentlyContinue
 $env:DATA_DIR = Join-Path (Get-Location) 'tests/.tmp/manual-p0-p1'
 npm run dev
 ```
 
-此时前端仍是 5173，后端为 3102；生产 `npm run start` 同样遵守 PORT。环境变量仅对当前终端及子进程生效。
+此时前端为 5174，后端为 3002；生产 `npm run start` 默认同样为 3002。仍支持 PORT/VITE_PORT 显式覆盖，但不自动换端口。环境变量仅对当前终端及子进程生效。
+
+技术控制台日志采用英文 ASCII 消息，避免 Windows PowerShell 将 UTF-8 中文按其他代码页解释而显示乱码；页面与 API 中文不变。端口冲突日志包含实际端口与处理提示。如果 start 显示旧日志或旧端口，请先重新 build。
 
 ## 验证命令
 

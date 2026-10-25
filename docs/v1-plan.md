@@ -80,9 +80,9 @@ workspace/specs/          本地规格及验证记录，已被 Git 忽略
 dist/client/ server/      构建输出，Git 忽略
 ```
 
-- 开发：Vite 127.0.0.1:5173，代理 /api 到 Express 127.0.0.1:3000；浏览器请求相对 /api 路径。
+- 开发：Vite 127.0.0.1:5174，代理 /api 到 Express 127.0.0.1:3002；浏览器请求相对 /api 路径。
 - 生产：npm run build 后 npm run start；Express 同源提供页面、API 和图片内容，无需运行 Vite。
-- 配置：HOST、PORT、DATA_DIR。默认只监听 127.0.0.1:3000；局域网通过 HOST=0.0.0.0 显式开启，不自动修改防火墙。
+- 配置：HOST、PORT、DATA_DIR。默认只监听 127.0.0.1:3002；局域网通过 HOST=0.0.0.0 显式开启，不自动修改防火墙。
 - DATA_DIR 默认采用 [设计基线](design.md) 的 Windows/macOS/Linux 规则；显式覆盖必须是绝对路径。所有业务 storage_key 由服务端生成且只能解析到数据目录内。
 - npm run dev 一并启动前后端并共同退出；build/lint/typecheck/test 由根 package.json 提供。业务阶段再提供 repro:invalid-annotation。测试统一放在 tests/，页面按手动集合验收。
 

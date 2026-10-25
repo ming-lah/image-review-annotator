@@ -15,7 +15,7 @@ try {
   const server = app.listen(config.port, config.host);
   server.once('error', (error: NodeJS.ErrnoException) => {
     storage?.close();
-    logger.error({ event: 'startup_failed', errorCode: error.code === 'EADDRINUSE' ? 'PORT_IN_USE' : 'LISTEN_FAILED', message: '监听失败，请检查 HOST、PORT 和端口占用' });
+    logger.error({ event: 'startup_failed', errorCode: error.code === 'EADDRINUSE' ? 'PORT_IN_USE' : 'LISTEN_FAILED', host: config.host, port: config.port, message: error.code === 'EADDRINUSE' ? `API port ${config.port} is already in use. Set PORT to an available port.` : 'Cannot listen. Check HOST, PORT and network permissions.' });
     process.exitCode = 1;
     process.disconnect?.();
   });
@@ -34,6 +34,6 @@ try {
   process.on('message', message => { if (message === 'shutdown') { shutdown(); process.disconnect?.(); } });
 } catch (error) {
   storage?.close();
-  logger.error({ event: 'startup_failed', errorCode: error instanceof StartupError ? error.code : `${stage}_FAILED`, message: error instanceof StartupError ? error.message : '存储初始化失败，请检查目录权限、数据库和迁移文件' });
+  logger.error({ event: 'startup_failed', errorCode: error instanceof StartupError ? error.code : `${stage}_FAILED`, message: error instanceof StartupError ? error.message : 'Storage initialization failed. Check directory permissions, database and migrations.' });
   process.exitCode = 1;
 }

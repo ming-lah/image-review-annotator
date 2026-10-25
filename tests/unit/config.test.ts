@@ -3,8 +3,8 @@ import path from 'node:path';
 import { defaultDataDir, readConfig } from '../../src/server/config.js';
 
 describe('configuration', () => {
-  it('defaults to loopback and port 3000', () => {
-    expect(readConfig({})).toMatchObject({ host: '127.0.0.1', port: 3000 });
+  it('defaults to loopback and port 3002', () => {
+    expect(readConfig({})).toMatchObject({ host: '127.0.0.1', port: 3002 });
   });
   it.each(['', '0', '-1', '65536', '3.5', '3000abc', ' 3000'])('rejects invalid PORT %s', port => {
     expect(() => readConfig({ PORT: port })).toThrow('PORT');
