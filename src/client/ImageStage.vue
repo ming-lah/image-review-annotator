@@ -2,7 +2,8 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { pointInImage, type Point } from './review';
 import type { EditorDraft, LocalMarker } from './review-session';
-import { fitScale, imageOffset, scrollToPoint, stagePadding, viewportCenter, type ViewSnapshot } from './review-view';
+import { fitScale, imageOffset, scrollToPoint, stageCanvasSize, viewportCenter, type ViewSnapshot } from './review-view';
+import { createStageResize } from './stage-resize';
 
 const props = defineProps<{
   image: { url: string; name: string; width: number; height: number };
@@ -19,21 +20,30 @@ const imageElement = ref<HTMLImageElement>();
 const viewport = ref({ width: 1, height: 1 });
 const mode = ref<'fit' | 'manual'>('fit');
 const manualScale = ref(1);
+const pixelRatio = ref(1);
 const markerSize = (marker: LocalMarker) => marker.size ?? 24;
 const scale = computed(() => mode.value === 'fit' ? fitScale(props.image, viewport.value) : manualScale.value);
 const rendered = computed(() => ({ width: props.image.width * scale.value, height: props.image.height * scale.value }));
-const offset = computed(() => imageOffset(props.image, viewport.value, scale.value));
-const canvasStyle = computed(() => ({ width: `${Math.max(viewport.value.width, rendered.value.width + stagePadding * 2)}px`, height: `${Math.max(viewport.value.height, rendered.value.height + stagePadding * 2)}px` }));
+const offset = computed(() => imageOffset(props.image, viewport.value, scale.value, pixelRatio.value));
+const canvasStyle = computed(() => { const size = stageCanvasSize(props.image, viewport.value, scale.value); return { width: `${size.width}px`, height: `${size.height}px` }; });
 const surfaceStyle = computed(() => ({ width: `${rendered.value.width}px`, height: `${rendered.value.height}px`, left: `${offset.value.x}px`, top: `${offset.value.y}px` }));
 let observer: ResizeObserver | undefined;
 let restoring = false;
+let resize: ReturnType<typeof createStageResize> | undefined;
+let observedSize: { width: number; height: number } | undefined;
+function measureViewport() {
+  const visible = !!stage.value?.clientWidth && !!stage.value.clientHeight;
+  if (!visible) return { width: 0, height: 0 };
+  // contentRect retains fractional content-box sizes; rounded clientWidth can exceed the real box.
+  return { width: Math.floor(observedSize?.width || stage.value!.clientWidth), height: Math.floor(observedSize?.height || stage.value!.clientHeight) };
+}
 
 function center(): Point {
-  return viewportCenter(props.image, viewport.value, scale.value, { left: stage.value?.scrollLeft ?? 0, top: stage.value?.scrollTop ?? 0 });
+  return viewportCenter(props.image, viewport.value, scale.value, { left: stage.value?.scrollLeft ?? 0, top: stage.value?.scrollTop ?? 0 }, pixelRatio.value);
 }
 async function reveal(point: Point) {
   await nextTick();
-  const scroll = scrollToPoint(point, props.image, viewport.value, scale.value);
+  const scroll = scrollToPoint(point, props.image, viewport.value, scale.value, pixelRatio.value);
   stage.value?.scrollTo({ left: scroll.left, top: scroll.top, behavior: 'instant' });
 }
 async function zoom(value: number | 'fit') {
@@ -53,11 +63,12 @@ function placeCenter() {
 }
 function select(id: string) { if (!props.disabled) emit('select', id); }
 function emitView() {
-  if (!restoring) emit('view', { mode: mode.value, manualScale: manualScale.value, markerSize: 24, anchor: center() });
+  if (!restoring && stage.value?.clientWidth && stage.value.clientHeight) emit('view', { mode: mode.value, manualScale: manualScale.value, markerSize: 24, anchor: center() });
 }
 async function restoreView(snapshot: ViewSnapshot) {
   restoring = true;
-  if (stage.value) viewport.value = { width: stage.value.clientWidth, height: stage.value.clientHeight };
+  const size = measureViewport();
+  if (size.width > 0 && size.height > 0) viewport.value = size;
   mode.value = snapshot.mode;
   manualScale.value = snapshot.manualScale;
   await reveal(snapshot.anchor);
@@ -67,16 +78,26 @@ async function restoreView(snapshot: ViewSnapshot) {
 watch([mode, manualScale], async () => { await nextTick(); emitView(); });
 
 watch(() => props.image.url, () => { mode.value = 'fit'; manualScale.value = 1; void reveal({ x: 0.5, y: 0.5 }); });
+function windowResize() { pixelRatio.value = window.devicePixelRatio || 1; resize?.request(); }
 onMounted(() => {
-  observer = new ResizeObserver(() => {
+  pixelRatio.value = window.devicePixelRatio || 1;
+  resize = createStageResize(measureViewport, size => {
+    if (size.width === viewport.value.width && size.height === viewport.value.height) return;
     const anchor = center();
-    if (!stage.value) return;
-    viewport.value = { width: stage.value.clientWidth, height: stage.value.clientHeight };
-    void reveal(anchor);
+    viewport.value = size;
+    if (mode.value === 'fit') stage.value?.scrollTo({ left: 0, top: 0, behavior: 'instant' });
+    else void reveal(anchor);
+  });
+  observer = new ResizeObserver(entries => {
+    const entry = entries.find(value => value.target === stage.value);
+    if (entry) observedSize = { width: entry.contentRect.width, height: entry.contentRect.height };
+    resize?.request();
   });
   if (stage.value) observer.observe(stage.value);
+  window.addEventListener('resize', windowResize);
+  resize.request();
 });
-onUnmounted(() => observer?.disconnect());
+onUnmounted(() => { observer?.disconnect(); resize?.dispose(); window.removeEventListener('resize', windowResize); });
 defineExpose({ reveal, restoreView });
 </script>
 

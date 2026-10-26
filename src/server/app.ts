@@ -9,9 +9,12 @@ import multer from 'multer';
 import { ApiFailure } from './http/errors.js';
 import { reviewRoutes } from './http/review-routes.js';
 import { workbenchRoutes } from './http/workbench-routes.js';
+import { createReviewEvents } from './http/review-events.js';
 
 export function createApp(storage: Pick<Storage, 'checkReady'> & Partial<Pick<Storage, 'db' | 'files'>>, clientDir?: string) {
   const app = express();
+  const events = createReviewEvents();
+  app.locals.closeReviewEvents = events.close;
   app.disable('x-powered-by');
   app.use((req, res, next) => {
     const requestId = randomUUID();
@@ -33,9 +36,12 @@ export function createApp(storage: Pick<Storage, 'checkReady'> & Partial<Pick<St
     try { storage.checkReady(); res.json({ status: 'ready' }); }
     catch { fail(res, 503, 'SERVICE_NOT_READY', '存储暂不可用，请稍后重试'); }
   });
-  if (storage.db && storage.files) app.use('/api/workbench', workbenchRoutes(storage as Storage));
+  if (storage.db && storage.files) {
+    app.get('/api/events', (_req, res) => { storage.checkReady(); events.connect(res); });
+    app.use('/api/workbench', workbenchRoutes(storage as Storage, events));
+  }
   app.use('/api', express.json({ limit: '32kb' }));
-  if (storage.db && storage.files) app.use('/api', reviewRoutes(storage as Storage));
+  if (storage.db && storage.files) app.use('/api', reviewRoutes(storage as Storage, events));
   app.use('/api', (_req, res) => { fail(res, 404, 'API_NOT_FOUND', '接口不存在'); });
   if (clientDir) {
     app.use(express.static(clientDir));

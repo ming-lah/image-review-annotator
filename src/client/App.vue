@@ -2,6 +2,7 @@
 import { computed, nextTick, ref, watch, watchEffect } from 'vue';
 import ImageStage from './ImageStage.vue';
 import SortMenu from './components/SortMenu.vue';
+import ReviewMergeDialog from './components/ReviewMergeDialog.vue';
 import type { WorkingMarker } from '../shared/workbench-contracts';
 import { useWorkbench } from './state/use-workbench';
 import entryArt from './assets/entry.svg';
@@ -9,6 +10,9 @@ const w = useWorkbench();
 const imageStage = ref<InstanceType<typeof ImageStage>>();
 const leaveDialog = ref<HTMLDialogElement>(); const fileInput = ref<HTMLInputElement>();
 const deleteDialog = ref<HTMLDialogElement>();
+const mobilePane = ref<'canvas' | 'markers' | 'history'>('canvas');
+watch(() => [w.page, w.currentImage?.id], () => { mobilePane.value = 'canvas'; });
+watch(mobilePane, async value => { if (value === 'canvas') { await nextTick(); const selected = w.stageMarkers.find(row => row.id === (w.page === 'history' ? w.historySelected : w.draft.selectedId)); if (selected) await imageStage.value?.reveal(selected); } });
 const uploadStatus = (value: string) => ({ waiting: '等待上传', uploading: '正在上传', success: '上传成功', failed: '上传失败', unknown: '结果未知，已暂停', abandoned: '已放弃等待' })[value] ?? value;
 watchEffect(() => { w.stage = imageStage.value; });
 const avatar = computed(() => Array.from(w.user?.username ?? '')[0] ?? '');
@@ -24,6 +28,8 @@ function setSize(row: WorkingMarker, event: Event) {
 }
 function openLink(event: MouseEvent, id: string) { if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return; event.preventDefault(); void w.openImage(id); }
 function chooseFile(event: Event) { const input = event.target as HTMLInputElement; const files = Array.from(input.files ?? []); input.value = ''; if (files.length) void w.uploadFiles(files); }
+async function savePoint(id: string) { if (await w.saveMarker(id)) { await nextTick(); document.getElementById(`marker-summary-${id}`)?.focus({ preventScroll: true }); } }
+async function cancelPoint(id: string) { if (w.blocked) return; w.copy.undo(id); await nextTick(); (document.getElementById(`marker-summary-${id}`) ?? document.getElementById('marker-inspector'))?.focus({ preventScroll: true }); }
 let previousFocus: HTMLElement | null = null;
 watch(() => [w.draft.selectedId, w.focusRevision, w.dialog], async () => {
   if (w.page !== 'review' || w.dialog || !w.draft.selectedId) return;
@@ -108,7 +114,10 @@ watch(() => w.deleteDialog, async value => {
       </form>
     </section>
   </main>
-  <template v-else>
+  <div
+    v-else
+    class="workspace-shell"
+  >
     <header class="topbar">
       <button
         class="brand brand-button"
@@ -140,6 +149,23 @@ watch(() => w.deleteDialog, async value => {
         </div>
       </details>
     </header>
+    <div
+      v-if="w.remoteGone || w.remoteChanged || w.syncWarning || w.updateStatus === 'disconnected' || w.updateStatus === 'unavailable'"
+      class="feedback collaboration-feedback"
+      role="status"
+    >
+      <p class="wrap">
+        {{ w.remoteGone ? '这张图片已被删除。本地输入仍在，无法保存到原图；可复制说明后返回图片库。' : w.remoteChanged ? '已保存内容发生变化，本地输入已保留，请核对最新版本。' : w.syncWarning || '更新通知暂不可用；可手动核对，保存时仍检查版本。' }}
+      </p>
+      <button
+        v-if="w.currentImage && !w.remoteGone"
+        class="btn"
+        :disabled="w.blocked || w.dialog"
+        @click="w.reviewLatest"
+      >
+        读取最新并核对
+      </button>
+    </div>
     <div
       v-if="w.busy || w.draft.busy || w.libraryBusy"
       class="progress-line"
@@ -453,7 +479,7 @@ watch(() => w.deleteDialog, async value => {
           <template v-if="w.page === 'review'">
             <button
               class="btn subtle danger"
-              :disabled="w.blocked"
+              :disabled="w.blocked || w.remoteGone"
               @click="w.askDelete"
             >
               删除图片
@@ -483,10 +509,10 @@ watch(() => w.deleteDialog, async value => {
               ◷ 查看历史
             </button><button
               class="btn primary"
-              :disabled="w.blocked || !w.copy.count()"
+              :disabled="w.blocked || w.remoteGone || !w.copy.count()"
               @click="w.save"
             >
-              ✓ 保存修改
+              ✓ 保存全部修改
             </button>
           </template><template v-else>
             <span class="pill gray">历史只读</span><button
@@ -499,7 +525,37 @@ watch(() => w.deleteDialog, async value => {
           </template>
         </div>
       </section>
-      <main :class="w.page === 'history' ? 'history-layout' : 'workbench'">
+      <nav
+        class="workspace-pane-tabs"
+        aria-label="工作区面板"
+      >
+        <button
+          class="btn"
+          :aria-pressed="mobilePane === 'canvas'"
+          @click="mobilePane = 'canvas'"
+        >
+          图片
+        </button>
+        <button
+          v-if="w.page === 'history'"
+          class="btn"
+          :aria-pressed="mobilePane === 'history'"
+          @click="mobilePane = 'history'"
+        >
+          版本
+        </button>
+        <button
+          class="btn"
+          :aria-pressed="mobilePane === 'markers'"
+          @click="mobilePane = 'markers'"
+        >
+          标记 {{ w.page === 'history' ? w.historyMarkers.length : w.activeMarkers.length }}
+        </button>
+      </nav>
+      <main
+        :class="w.page === 'history' ? 'history-layout' : 'workbench'"
+        :data-pane="mobilePane"
+      >
         <aside
           v-if="w.page === 'review'"
           class="image-rail"
@@ -594,15 +650,17 @@ watch(() => w.deleteDialog, async value => {
             :disabled="w.locked"
             :read-only="w.page === 'history'"
             :temporary-labels="false"
-            @place="w.place"
-            @select="w.selectMarker"
+            @place="point => { w.place(point); mobilePane = 'markers'; }"
+            @select="id => { w.selectMarker(id); mobilePane = 'markers'; }"
             @view="w.saveView"
           />
         </section>
         <aside
           v-if="w.page === 'review'"
+          id="marker-inspector"
           class="inspector"
           aria-label="标记与说明"
+          tabindex="-1"
         >
           <div class="inspector-heading">
             <h2>标记 {{ w.activeMarkers.length }}</h2><button
@@ -626,25 +684,38 @@ watch(() => w.deleteDialog, async value => {
               class="marker-item"
               :class="{ active: row.id === w.draft.selectedId, 'pending-delete': w.draft.removed.includes(row.id) }"
             >
-              <button
-                class="marker-summary"
-                :disabled="w.blocked"
-                :aria-expanded="w.expandedIds.includes(row.id)"
-                :aria-controls="`details-${row.id}`"
-                @click="w.toggle(row.id)"
-              >
-                <span class="marker-num">#{{ row.label }}</span><span
-                  class="severity"
-                  :class="row.severity"
-                /><span class="grow truncate">{{ row.note || '请填写问题说明' }}</span><span
-                  v-if="w.copy.kind(row.id)"
-                  class="pill"
-                  :class="w.copy.kind(row.id) === 'delete' ? 'red' : w.copy.kind(row.id) === 'add' ? 'green' : 'amber'"
-                >{{ changeText(w.copy.kind(row.id)) }}</span><span
-                  v-else
-                  class="muted"
-                >{{ w.expandedIds.includes(row.id) ? '−' : '+' }}</span>
-              </button>
+              <div class="marker-summary-row">
+                <button
+                  :id="`marker-summary-${row.id}`"
+                  class="marker-summary"
+                  :disabled="w.blocked"
+                  :aria-expanded="w.expandedIds.includes(row.id)"
+                  :aria-controls="`details-${row.id}`"
+                  @click="w.toggle(row.id)"
+                >
+                  <span class="marker-num">#{{ row.label }}</span><span
+                    class="severity"
+                    :class="row.severity"
+                  /><span class="grow truncate">{{ row.note || '请填写问题说明' }}</span><span
+                    v-if="w.copy.kind(row.id)"
+                    class="pill"
+                    :class="w.copy.kind(row.id) === 'delete' ? 'red' : w.copy.kind(row.id) === 'add' ? 'green' : 'amber'"
+                  >{{ changeText(w.copy.kind(row.id)) }}</span><span
+                    v-else
+                    class="muted"
+                  >{{ w.expandedIds.includes(row.id) ? '−' : '+' }}</span>
+                </button>
+                <button
+                  v-if="w.copy.old(row.id)"
+                  class="marker-delete"
+                  :aria-label="`删除标记 ${row.label}`"
+                  title="删除标记"
+                  :disabled="w.blocked"
+                  @click="w.copy.remove(row.id)"
+                >
+                  ×
+                </button>
+              </div>
               <div
                 v-show="w.expandedIds.includes(row.id)"
                 :id="`details-${row.id}`"
@@ -718,17 +789,17 @@ watch(() => w.deleteDialog, async value => {
                   本次新建 · 尚未保存
                 </p><div class="marker-actions">
                   <button
-                    class="btn subtle"
-                    :disabled="w.blocked"
-                    @click="w.copy.undo(row.id)"
+                    class="btn primary"
+                    :disabled="w.blocked || w.remoteGone || !w.copy.kind(row.id)"
+                    @click="savePoint(row.id)"
                   >
-                    取消本条更改
+                    保存
                   </button><button
                     class="btn subtle danger"
                     :disabled="w.blocked"
-                    @click="w.copy.remove(row.id)"
+                    @click="cancelPoint(row.id)"
                   >
-                    {{ w.copy.old(row.id) ? '删除' : '取消新点' }}
+                    取消
                   </button>
                 </div>
               </div>
@@ -848,7 +919,16 @@ watch(() => w.deleteDialog, async value => {
         </aside>
       </main>
     </template>
-  </template>
+  </div>
+  <ReviewMergeDialog
+    :plan="w.merge"
+    :choices="w.mergeChoices"
+    :ready="w.mergeReady"
+    :error="w.errorText"
+    @choose="(id, choice) => w.mergeChoices[id] = choice"
+    @cancel="w.cancelMerge"
+    @apply="w.applyMerge"
+  />
   <dialog
     ref="deleteDialog"
     class="review-dialog"

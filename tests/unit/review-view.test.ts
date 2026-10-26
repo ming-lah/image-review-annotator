@@ -1,7 +1,29 @@
 import { describe, expect, it } from 'vitest';
-import { fitScale, imageOffset, scrollToPoint, stepScale, viewportCenter } from '../../src/client/review-view';
+import { fitScale, imageOffset, scrollToPoint, stageCanvasSize, stepScale, viewportCenter } from '../../src/client/review-view';
 
 describe('review viewport geometry', () => {
+  it('aligns centered originals to physical pixels while keeping anchor math consistent at different display scales', () => {
+    const image = { width: 32, height: 24 }; const viewport = { width: 799, height: 451 };
+    for (const ratio of [1, 1.25, 1.5, 2]) {
+      const offset = imageOffset(image, viewport, 1, ratio);
+      expect(offset.x * ratio).toBeCloseTo(Math.round(offset.x * ratio), 9); expect(offset.y * ratio).toBeCloseTo(Math.round(offset.y * ratio), 9);
+      expect(Math.abs(offset.x + image.width / 2 - viewport.width / 2)).toBeLessThanOrEqual(0.5 / ratio + 1e-7);
+      const large = { width: 2000, height: 1500 }; const anchor = { x: 0.6, y: 0.6 };
+      const scroll = scrollToPoint(anchor, large, viewport, 2, ratio);
+      expect(viewportCenter(large, viewport, 2, scroll, ratio).x).toBeCloseTo(anchor.x, 12);
+      expect(viewportCenter(large, viewport, 2, scroll, ratio).y).toBeCloseTo(anchor.y, 12);
+    }
+  });
+  it('keeps fitted canvas sizes stable and centers wide/tall/small images without fractional overflow', () => {
+    for (const image of [{ width: 1920, height: 1080 }, { width: 733, height: 12000 }, { width: 32, height: 24 }]) {
+      for (const viewport of [{ width: 317, height: 223 }, { width: 799, height: 451 }, { width: 1063, height: 663 }]) {
+        const scale = fitScale(image, viewport); const canvas = stageCanvasSize(image, viewport, scale); const offset = imageOffset(image, viewport, scale);
+        expect(canvas).toEqual(viewport); expect(stageCanvasSize(image, canvas, fitScale(image, canvas))).toEqual(canvas);
+        expect(offset.x + image.width * scale / 2).toBeCloseTo(viewport.width / 2, 9);
+        expect(offset.y + image.height * scale / 2).toBeCloseTo(viewport.height / 2, 9);
+      }
+    }
+  });
   it('fits either dimension without enlarging small images and permits a fit below 10%', () => {
     expect(fitScale({ width: 2000, height: 1000 }, { width: 1064, height: 664 })).toBe(0.5);
     expect(fitScale({ width: 1000, height: 2000 }, { width: 1064, height: 664 })).toBe(0.3);

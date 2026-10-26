@@ -14,7 +14,7 @@ export function reviewRepository(db: Database.Database, onChange?: (imageId: str
   const requireAnnotation = (id: string) => { const row = annotation(id); if (!row) throw new ApiFailure(404, 'ANNOTATION_NOT_FOUND', '标记不存在'); return row; };
   const conflict = () => new ApiFailure(409, 'ANNOTATION_VERSION_CONFLICT', '标记已被修改，请读取最新内容后比较');
   return {
-    image, requireImage,
+    image, requireImage, requireAnnotation,
     detail(id: string) { return { image: requireImage(id), annotations: db.prepare(`SELECT ${annotationColumns} FROM annotations WHERE image_id=? ORDER BY number`).all(id) as AnnotationDto[] }; },
     storageKey(id: string) { requireImage(id); return (db.prepare('SELECT storage_key FROM images WHERE id=?').get(id) as { storage_key: string }).storage_key; },
     insertImage(row: ImageDto, storageKey: string) {

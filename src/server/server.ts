@@ -24,6 +24,7 @@ try {
   const shutdown = () => {
     if (stopping) return;
     stopping = true;
+    app.locals.closeReviewEvents();
     const deadline = setTimeout(() => { server.closeAllConnections(); }, 3000);
     deadline.unref();
     server.close(() => { clearTimeout(deadline); storage?.close(); logger.info({ event: 'stopped' }); });

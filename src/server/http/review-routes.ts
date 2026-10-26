@@ -14,12 +14,18 @@ import { ApiFailure, parseInput } from './errors.js';
 import { imageManagement } from '../persistence/image-management.js';
 import { deleteImageSchema } from '../../shared/workbench-contracts.js';
 import { createAnnotationSchema, deleteAnnotationSchema, updateAnnotationSchema, uuidSchema } from '../../shared/review-contracts.js';
+import type { ReviewEvents } from './review-events.js';
+import { logger } from '../logger.js';
 
-export function reviewRoutes(storage: Storage) {
+export function reviewRoutes(storage: Storage, events: ReviewEvents) {
   const router = Router();
   const history = workbenchRepository(storage.db);
   const repository = reviewRepository(storage.db, (imageId, actor) => history.capture(imageId, actor));
   const management = imageManagement(storage.db);
+  const changed = (imageId: string) => {
+    try { events.publish({ type: 'image.changed', imageId, revisionId: history.detail(imageId).revision.id }); }
+    catch { logger.warn({ event: 'update_notification_failed', imageId }); }
+  };
   const options: multer.Options & { streamHandler(req: Request, busboy: Writable): void } = {
     storage: multer.diskStorage({
       destination: (_req, _file, done) => { try { storage.files.check(); done(null, storage.files.uploads); } catch (error) { done(error as Error, ''); } },
@@ -71,6 +77,7 @@ export function reviewRoutes(storage: Storage) {
       usersRepository(storage.db).requireUser(userId);
       storage.db.transaction(() => { management.requireLiveId(id); repository.insertImage(image, installed!); history.initialize(id, userId); }).immediate();
       installed = undefined;
+      changed(id);
       res.status(201).json(image);
     } finally {
       if (installed) storage.files.rollback(installed, res.locals.requestId as string);
@@ -89,6 +96,7 @@ export function reviewRoutes(storage: Storage) {
     // Validate the file boundary before committing a logical deletion, even if the original is missing.
     storage.files.contentPath(repository.storageKey(id));
     const key = management.remove(id, value);
+    events.publish({ type: 'image.deleted', imageId: id });
     storage.files.removeImage(key, res.locals.requestId as string);
     res.sendStatus(204);
   });
@@ -109,6 +117,7 @@ export function reviewRoutes(storage: Storage) {
     const value = parseInput(createAnnotationSchema, req.body);
     Object.assign(res.locals, { imageId, annotationId: value.id, actorId: value.actorId });
     const result = repository.create(imageId, value);
+    if (result.created) changed(imageId);
     res.status(result.created ? 201 : 200).json(result.annotation);
   });
   router.patch('/annotations/:id', (req, res) => {
@@ -116,14 +125,18 @@ export function reviewRoutes(storage: Storage) {
     const id = parseInput(uuidSchema, req.params.id);
     const value = parseInput(updateAnnotationSchema, req.body);
     Object.assign(res.locals, { annotationId: id, actorId: value.actorId });
-    res.json(repository.update(id, value));
+    const result = repository.update(id, value);
+    changed(result.imageId);
+    res.json(result);
   });
   router.delete('/annotations/:id', (req, res) => {
     storage.checkReady();
     const id = parseInput(uuidSchema, req.params.id);
     const value = parseInput(deleteAnnotationSchema, req.body);
     Object.assign(res.locals, { annotationId: id, actorId: value.actorId });
+    const imageId = repository.requireAnnotation(id).imageId;
     repository.remove(id, value);
+    changed(imageId);
     res.sendStatus(204);
   });
   return router;

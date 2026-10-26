@@ -6,12 +6,13 @@ import type { WorkbenchApi } from '../../src/client/http/workbench-api';
 import type { WorkspaceDetail, SaveResult, HistoryDetail, Library } from '../../src/shared/workbench-contracts';
 import { createWorkingCopy } from '../../src/client/state/working-copy';
 import { createToast } from '../../src/client/state/toast';
+import type { UpdateHandlers } from '../../src/client/http/review-events';
 
 const user = { userId: crypto.randomUUID(), username: '审阅甲' };
 const image = { id: crypto.randomUUID(), originalName: 'one.png', mimeType: 'image/png' as const, width: 32, height: 24, fileSize: 3, sha256: 'a'.repeat(64), createdAt: '2026-10-26T00:00:00.000Z', updatedAt: '2026-10-26T00:00:00.000Z' };
 const baseline: WorkspaceDetail = { image, annotations: [], revision: { id: crypto.randomUUID(), imageId: image.id, parentRevisionId: null, userId: user.userId, username: user.username, savedAt: image.createdAt, kind: 'upload', versionNumber: 0, added: 0, modified: 0, deleted: 0 } };
 const existing = { id: crypto.randomUUID(), imageId: image.id, number: 1, size: 24, x: 0.2, y: 0.3, note: '原说明', severity: 'medium' as const, createdBy: user.userId, createdByName: user.username, updatedBy: user.userId, updatedByName: user.username, version: 1, createdAt: image.createdAt, updatedAt: image.createdAt };
-function result(note = '新说明'): SaveResult { return { created: true, savedRevisionId: crypto.randomUUID(), detail: { ...baseline, annotations: [{ ...existing, note }], revision: { ...baseline.revision, id: crypto.randomUUID(), parentRevisionId: baseline.revision.id, kind: 'save', added: 1 } } }; }
+function result(note = '新说明'): SaveResult { const id = crypto.randomUUID(); return { created: true, savedRevisionId: id, detail: { ...baseline, annotations: [{ ...existing, note }], revision: { ...baseline.revision, id, parentRevisionId: baseline.revision.id, kind: 'save', added: 1 } } }; }
 
 describe('manual working copy', () => {
   it('persists independent size edits and restores their exact cached or cancelled values', async () => {
@@ -78,17 +79,18 @@ const renderer = createRenderer<object, object>({ createElement: () => ({}), cre
 const mounted: { unmount(): void }[] = [];
 afterEach(() => { for (const app of mounted.splice(0)) app.unmount(); vi.unstubAllGlobals(); });
 function setup() {
+  let updates: UpdateHandlers | undefined; const stopUpdates = vi.fn();
   const session = new Map<string, string>(); const local = new Map<string, string>();
   const storage = (values: Map<string, string>) => ({ getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => { values.set(key, value); }, removeItem: (key: string) => values.delete(key) });
   const location = { href: 'http://127.0.0.1:5174/' };
   vi.stubGlobal('location', location);
   vi.stubGlobal('window', { sessionStorage: storage(session), localStorage: storage(local), history: { replaceState: (_state: unknown, _unused: string, url: URL) => { location.href = String(url); } }, addEventListener() {}, removeEventListener() {}, confirm: () => false });
-  const api = { enter: vi.fn(async () => user), library: vi.fn(async (): Promise<Library> => ({ items: [{ image, annotationCount: 0, revisionCount: 1, username: user.username, uploadedByUserId: user.userId }], total: 1, page: 1, pageSize: 12 })), detail: vi.fn(async () => structuredClone(baseline)), content: vi.fn(async () => new File(['png'], 'one.png', { type: 'image/png' })), upload: vi.fn(async () => image), history: vi.fn(async () => ({ items: [baseline.revision], total: 1, page: 1, pageSize: 20 })), historical: vi.fn(async (): Promise<HistoryDetail> => ({ ...baseline, changes: [] })), save: vi.fn(async () => result()) } satisfies Omit<WorkbenchApi, 'removeImage'>;
+  const api = { enter: vi.fn(async () => user), library: vi.fn(async (): Promise<Library> => ({ items: [{ image, annotationCount: 0, revisionCount: 1, username: user.username, uploadedByUserId: user.userId }], total: 1, page: 1, pageSize: 12 })), detail: vi.fn(async () => structuredClone(baseline)), content: vi.fn(async () => new File(['png'], 'one.png', { type: 'image/png' })), upload: vi.fn(async () => image), history: vi.fn(async () => ({ items: [baseline.revision], total: 1, page: 1, pageSize: 20 })), historical: vi.fn(async (): Promise<HistoryDetail> => ({ ...baseline, changes: [] })), save: vi.fn<WorkbenchApi['save']>(async () => result()) } satisfies Omit<WorkbenchApi, 'removeImage'>;
   const managementApi = { ...api, removeImage: vi.fn(async () => {}) };
   let controller!: ReturnType<typeof useWorkbench>;
-  const app = renderer.createApp({ setup() { controller = useWorkbench({ api: managementApi, preview: { createUrl: () => 'blob:test', revokeUrl() {}, decode: async () => ({ width: 32, height: 24 }) } }); return () => null; } });
+  const app = renderer.createApp({ setup() { controller = useWorkbench({ api: managementApi, updates: handlers => { updates = handlers; return stopUpdates; }, preview: { createUrl: () => 'blob:test', revokeUrl() {}, decode: async () => ({ width: 32, height: 24 }) } }); return () => null; } });
   mounted.push(app); app.mount({});
-  return { w: controller, api: managementApi, session, local };
+  return { w: controller, api: managementApi, session, local, stopUpdates, notify: () => updates?.event({ type: 'image.changed', imageId: image.id, revisionId: crypto.randomUUID() }), reconnect: () => updates?.ready(), unmount: () => app.unmount() };
 }
 describe('entry and workbench composition flow', () => {
   it('P5 switches between independent images through discard protection and restores only the matching view and cache', async () => {
@@ -241,6 +243,126 @@ describe('entry and workbench composition flow', () => {
     await w.toLibrary(); expect(w.page).toBe('review'); expect(w.dialog).toBe(false);
     expect(await w.save()).toBe(true); expect(api.save.mock.calls[0]).toEqual(api.save.mock.calls[1]);
     await nextTick(); expect(session.has('image-review:draft:' + image.id)).toBe(false);
+  });
+});
+
+describe('window fixes and per-marker saving composition', () => {
+  it('saves only one point, collapses only that editor and retains the other empty draft/cache', async () => {
+    const { w, api, session } = setup(); w.username = 'A'; await w.enter(); await w.openImage(image.id);
+    w.place({ x: 0.1, y: 0.1 }); w.draft.markers[0].note = 'target'; const target = { ...w.draft.markers[0] };
+    w.place({ x: 0.8, y: 0.8 }); const otherId = w.draft.markers[1].id;
+    const saved = result(); saved.detail.annotations = [{ ...existing, ...target, size: 24 }]; api.save.mockResolvedValueOnce(saved);
+    expect(await w.saveMarker(target.id)).toBe(true);
+    expect(api.save.mock.calls[0][1].markers.map(row => row.id)).toEqual([target.id]);
+    expect(w.expandedIds).toEqual([otherId]); expect(w.draft.markers[1].note).toBe(''); expect(w.copy.count()).toBe(1);
+    await nextTick(); expect(session.get('image-review:draft:' + image.id)).toContain(otherId);
+    w.copy.undo(otherId); expect(w.copy.count()).toBe(0); expect(w.draft.markers[0].id).toBe(target.id);
+  });
+  it('uses the original single-point request when the global confirm button retries an unknown save', async () => {
+    const { w, api } = setup(); w.username = 'A'; await w.enter(); await w.openImage(image.id);
+    w.place({ x: 0.1, y: 0.1 }); w.draft.markers[0].note = 'target'; const target = { ...w.draft.markers[0] };
+    w.place({ x: 0.8, y: 0.8 }); w.draft.markers[1].note = 'other';
+    const saved = result(); saved.detail.annotations = [{ ...existing, ...target, size: 24 }]; api.save.mockRejectedValueOnce(new RequestFailure('lost')).mockResolvedValueOnce(saved);
+    expect(await w.saveMarker(target.id)).toBe(false); expect(w.draft.pendingMarkerId).toBe(target.id);
+    expect(await w.save()).toBe(true); expect(api.save.mock.calls[0]).toEqual(api.save.mock.calls[1]); expect(w.copy.count()).toBe(1); expect(w.draft.markers[1].note).toBe('other');
+  });
+  it('keeps a late saved baseline separate from later remote changes so remaining drafts still require review', async () => {
+    const { w, api } = setup(); api.detail.mockResolvedValueOnce({ ...baseline, annotations: [existing] }); w.username = 'A'; await w.enter(); await w.openImage(image.id);
+    w.draft.markers[0].note = 'target'; w.place({ x: 0.8, y: 0.8 }); w.draft.markers[1].note = 'other';
+    const own = result('target'); const later = result('remote later'); api.save.mockResolvedValueOnce({ ...later, created: false, savedRevisionId: own.savedRevisionId });
+    api.historical.mockResolvedValueOnce({ ...own.detail, changes: [] });
+    expect(await w.saveMarker(existing.id)).toBe(true); expect(w.remoteChanged).toBe(true); expect(w.draft.base?.revision.id).toBe(own.savedRevisionId); expect(w.draft.markers[1].note).toBe('other');
+    const restored = createWorkingCopy(); restored.restore(w.copy.snapshot()!, image.id); expect(restored.state.markers[1].note).toBe('other');
+    api.detail.mockResolvedValueOnce(later.detail); await w.save(); expect(w.merge).not.toBeNull(); expect(api.save).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('P6 review and notification composition', () => {
+  it('keeps input on 409, requires explicit conflict choices and creates a fresh request after applying a new baseline', async () => {
+    const { w, api } = setup(); const start = { ...baseline, annotations: [existing] };
+    api.detail.mockResolvedValueOnce(structuredClone(start)); w.username = 'A'; await w.enter(); await w.openImage(image.id);
+    w.draft.markers[0].note = 'my edit';
+    api.save.mockRejectedValueOnce(new RequestFailure('changed', 409, 'REVIEW_BASE_CHANGED'));
+    expect(await w.save()).toBe(false); const originalRequest = api.save.mock.calls[0][1]; expect(w.remoteChanged).toBe(true);
+    const latest = { ...start, annotations: [{ ...existing, note: 'their edit', version: 2 }], revision: { ...baseline.revision, id: crypto.randomUUID(), versionNumber: 1, username: 'B' } };
+    api.detail.mockResolvedValue(latest); await w.reviewLatest();
+    expect(w.merge?.conflicts).toHaveLength(1); expect(w.mergeReady).toBe(false); const snapshot = w.copy.snapshot();
+    w.applyMerge(); expect(w.copy.snapshot()).toBe(snapshot);
+    w.cancelMerge(); expect(w.copy.snapshot()).toBe(snapshot);
+    await w.reviewLatest(); w.mergeChoices[existing.id] = 'mine'; w.applyMerge();
+    expect(w.draft.base?.revision.id).toBe(latest.revision.id); expect(w.draft.markers[0].note).toBe('my edit'); expect(w.copy.count()).toBe(1); expect(w.merge).toBeNull();
+    await w.save(); const nextRequest = api.save.mock.calls[1][1];
+    expect(nextRequest.requestId).not.toBe(originalRequest.requestId); expect(nextRequest.baseRevisionId).toBe(latest.revision.id);
+  });
+  it('merges independent additions and caches the new baseline without immediately submitting', async () => {
+    const { w, api, session } = setup(); w.username = 'A'; await w.enter(); await w.openImage(image.id);
+    w.place({ x: 0.8, y: 0.8 }); w.draft.markers[0].note = 'my new'; const ownId = w.draft.markers[0].id;
+    const latest = result('remote new').detail; api.detail.mockResolvedValue(latest);
+    await w.reload(); expect(w.merge?.conflicts).toEqual([]); expect(w.draft.markers).toHaveLength(1);
+    w.applyMerge(); await nextTick(); expect(api.save).not.toHaveBeenCalled();
+    expect(w.draft.markers.map(row => row.id)).toEqual([existing.id, ownId]); expect(w.copy.count()).toBe(1);
+    const cached = JSON.parse(session.get('image-review:draft:' + image.id)!); expect(cached.base.revision.id).toBe(latest.revision.id);
+  });
+  it('recreates an edited marker only with a new ID after remote deletion, and preserves pending local deletions after rebase', async () => {
+    const { w, api } = setup(); api.detail.mockResolvedValueOnce({ ...baseline, annotations: [existing] });
+    w.username = 'A'; await w.enter(); await w.openImage(image.id); w.draft.markers[0].note = 'my text';
+    api.detail.mockResolvedValue({ ...baseline, revision: { ...baseline.revision, id: crypto.randomUUID() } }); await w.reviewLatest();
+    w.mergeChoices[existing.id] = 'recreate'; w.applyMerge();
+    expect(w.draft.markers[0].id).not.toBe(existing.id); expect(w.draft.markers[0].note).toBe('my text'); expect(w.copy.kind(w.draft.markers[0].id)).toBe('add');
+    const copy = createWorkingCopy(); copy.bind({ ...baseline, annotations: [existing] });
+    expect(copy.rebase({ ...baseline, annotations: [{ ...existing, version: 2 }] }, [])).toBe(true);
+    expect(copy.state.removed).toEqual([existing.id]); expect(copy.count()).toBe(1); copy.restoreRemoved(existing.id); expect(copy.count()).toBe(0);
+  });
+  it('refreshes a clean working copy without reloading original bytes and preserves its selected marker', async () => {
+    const { w, api, notify } = setup(); api.detail.mockResolvedValueOnce({ ...baseline, annotations: [existing] });
+    w.username = 'A'; await w.enter(); await w.openImage(image.id); w.draft.selectedId = existing.id;
+    const latest = result('remote edit').detail; api.detail.mockResolvedValue(latest); notify();
+    await vi.waitFor(() => expect(w.draft.base?.revision.id).toBe(latest.revision.id));
+    expect(w.draft.selectedId).toBe(existing.id); expect(api.content).toHaveBeenCalledTimes(1); expect(w.copy.count()).toBe(0);
+  });
+  it('does not overwrite input typed while a background GET was in flight', async () => {
+    const { w, api, notify } = setup(); w.username = 'A'; await w.enter(); await w.openImage(image.id);
+    let finish!: (value: WorkspaceDetail) => void; api.detail.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    notify(); await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    w.place({ x: 0.5, y: 0.5 }); w.draft.markers[0].note = 'typing'; finish(result('remote').detail);
+    await vi.waitFor(() => expect(w.remoteChanged).toBe(true));
+    expect(w.draft.base?.revision.id).toBe(baseline.revision.id); expect(w.draft.markers[0].note).toBe('typing');
+  });
+  it('ignores late reads for another image and stops updates on user switch/unmount', async () => {
+    const { w, api, notify, stopUpdates, unmount } = setup(); w.username = 'A'; await w.enter(); await w.openImage(image.id);
+    let finish!: (value: WorkspaceDetail) => void; api.detail.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    notify(); await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    const id = crypto.randomUUID(); const other = { ...baseline, image: { ...image, id }, revision: { ...baseline.revision, imageId: id } };
+    api.detail.mockResolvedValueOnce(other); await w.openImage(id); finish(result('old').detail); await nextTick();
+    expect(w.currentImage?.id).toBe(id); await w.switchUser(); expect(stopUpdates).toHaveBeenCalledTimes(1);
+    unmount(); expect(w.user).toBeNull();
+  });
+  it('reconciles on reconnect without replacing historical views and marks a genuinely deleted image unsavable', async () => {
+    const { w, api, reconnect } = setup(); w.username = 'A'; await w.enter(); await w.openImage(image.id); await w.openHistory();
+    const historical = w.historical; api.detail.mockResolvedValue(result('remote').detail); reconnect();
+    await vi.waitFor(() => expect(w.remoteChanged).toBe(true)); expect(w.page).toBe('history'); expect(w.historical).toEqual(historical);
+    w.backToReview(); await vi.waitFor(() => expect(w.draft.base?.annotations[0]?.note).toBe('remote'));
+    w.draft.markers[0].note = 'local text'; api.detail.mockRejectedValue(new RequestFailure('gone', 404, 'IMAGE_NOT_FOUND')); reconnect();
+    await vi.waitFor(() => expect(w.remoteGone).toBe(true)); expect(w.draft.markers[0].note).toBe('local text'); expect(await w.save()).toBe(false);
+    await w.toLibrary(); expect(w.dialog).toBe(true); await w.resolveLeave('discard'); expect(w.page).toBe('library');
+  });
+  it('defers notification reconciliation while an original save is unknown and retries its exact payload first', async () => {
+    const { w, api, notify } = setup(); w.username = 'A'; await w.enter(); await w.openImage(image.id);
+    w.place({ x: 0.4, y: 0.4 }); w.draft.markers[0].note = 'unknown'; api.save.mockRejectedValueOnce(new RequestFailure('lost'));
+    await w.save(); const reads = api.detail.mock.calls.length; notify(); await nextTick(); expect(api.detail.mock.calls).toHaveLength(reads);
+    await w.reviewLatest(); expect(w.merge).toBeNull(); const saved = result(); api.save.mockResolvedValueOnce(saved); api.detail.mockResolvedValue(saved.detail);
+    expect(await w.save()).toBe(true); expect(api.save.mock.calls[0]).toEqual(api.save.mock.calls[1]);
+    await vi.waitFor(() => expect(api.detail.mock.calls.length).toBeGreaterThan(reads)); expect(w.draft.pending).toBeNull();
+  });
+  it('can resolve an unknown save even if an earlier in-flight GET discovers that the image was deleted', async () => {
+    const { w, api, notify } = setup(); w.username = 'A'; await w.enter(); await w.openImage(image.id);
+    let fail!: (value: Error) => void; api.detail.mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }));
+    notify(); await vi.waitFor(() => expect(fail).toBeTypeOf('function'));
+    w.place({ x: 0.4, y: 0.4 }); w.draft.markers[0].note = 'keep'; api.save.mockRejectedValueOnce(new RequestFailure('lost')); await w.save();
+    fail(new RequestFailure('gone', 404, 'IMAGE_NOT_FOUND')); await vi.waitFor(() => expect(w.remoteGone).toBe(true));
+    api.save.mockRejectedValueOnce(new RequestFailure('gone', 404, 'IMAGE_NOT_FOUND'));
+    expect(await w.save()).toBe(false); expect(api.save.mock.calls[0]).toEqual(api.save.mock.calls[1]); expect(w.draft.pending).toBeNull(); expect(w.draft.markers[0].note).toBe('keep');
+    await w.toLibrary(); await w.resolveLeave('discard'); expect(w.page).toBe('library');
   });
 });
 
