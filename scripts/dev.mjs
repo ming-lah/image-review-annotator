@@ -25,4 +25,5 @@ for (const child of children) {
 }
 process.on('SIGINT', () => stop(0));
 process.on('SIGTERM', () => stop(0));
+process.on('disconnect', () => stop(0));
 process.on('message', message => { if (message === 'shutdown') { stop(0); process.disconnect?.(); } });

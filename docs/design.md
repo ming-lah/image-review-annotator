@@ -4,6 +4,8 @@
 状态：设计基线；阶段实现进度见开发记录
 来源：作业题面、需求讨论和当前工作区的设计注释
 
+2026-10-26当前实现补充：已实现username入口、共享图库、整图保存和完整版本查看，入口为“查看历史”，不暴露继承概念。004新增逐点size（12–48px，默认24）及不可变图片版本号；显示序号按当前/各历史有效集合连续编号，真实ID不变。旧历史缺size按24读取，内部差量重建保留，原图一份/历史全部保留。逐点大小、Toast、缩放滑块、摘要同步和默认收起已获用户总体手测通过；未完成项见tests/manual/current.md，后续回归见tests/manual/regression.md；下文保留初始设计背景。
+
 ## 产品形态
 
 这是一个可启动的 Web 应用，不做 Electron 或其他桌面客户端。
@@ -59,7 +61,7 @@ Linux：  $XDG_DATA_HOME/ImageReviewAnnotator，未设置时 ~/.local/share/Imag
 <DATA_DIR>/
   app.db
   images/<image-id>/original.<ext>
-  logs/
+  tmp/uploads/<request-id>.upload
 ```
 
 数据库保存相对 `storage_key`，不保存跨平台绝对路径。上传流程是“临时文件 → 校验 → 正式文件 → SQLite 事务”；失败时清理文件，并保留孤儿文件扫描能力。备份必须同时覆盖数据库和图片目录。
@@ -109,9 +111,15 @@ images
 annotations
   id, image_id, number, x, y, note, severity
   created_by, created_by_name, updated_by, version, created_at, updated_at
+  updated_by_name
+
+annotation_creations（P4 最小创建重复保护）
+  id, image_id, fingerprint
 ```
 
 `x`、`y` 是 0 到 1 的归一化坐标；`(image_id, number)` 唯一；图片删除级联删除标记。第一版不建立账号表，但保留操作人字段。
+
+P4 已实现上述业务表和逐条保存；annotation_creations 只存规范化创建载荷摘要，标记删除后保留，阻止创建重试复活，不提供历史版本。图片列表/删除 API 仍留给 P5；日志当前输出到控制台，不宣称已有 logs/ 文件落盘。
 
 ## 前端坐标方案
 

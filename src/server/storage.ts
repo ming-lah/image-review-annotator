@@ -4,13 +4,15 @@ import { randomUUID, createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
 import { StartupError } from './config.js';
+import { imageFiles } from './persistence/image-files.js';
 
 export function checkDirectory(dataDir: string) {
   const probe = path.join(dataDir, `.ready-${randomUUID()}`);
   let created = false;
   try {
-    fs.writeFileSync(probe, 'ready', { flag: 'wx' });
+    const fd = fs.openSync(probe, 'wx');
     created = true;
+    try { fs.writeSync(fd, 'ready'); } finally { fs.closeSync(fd); }
     fs.unlinkSync(probe);
     created = false;
   } finally {
@@ -50,7 +52,13 @@ export function openStorage(dataDir: string, migrations = fileURLToPath(new URL(
     db.pragma('busy_timeout = 5000');
     try { migrate(db, migrations); }
     catch { throw new StartupError('MIGRATION_FAILED', 'Database migration failed. Check migration files and the database version.'); }
-    return { db, checkReady() { db.prepare('SELECT 1').get(); checkDirectory(dataDir); }, close() { db.close(); } };
+    let files: ReturnType<typeof imageFiles>;
+    try {
+      files = imageFiles(dataDir);
+      files.check();
+      if (db.prepare("SELECT name FROM sqlite_master WHERE name='images'").get()) files.scan(db);
+    } catch { throw new StartupError('DATA_DIRECTORY_UNAVAILABLE', 'Cannot initialize image directories or scan stored files.'); }
+    return { db, files, checkReady() { db.prepare('SELECT 1').get(); checkDirectory(dataDir); files.check(); }, close() { db.close(); } };
   } catch (error) { db.close(); throw error; }
 }
 export type Storage = ReturnType<typeof openStorage>;

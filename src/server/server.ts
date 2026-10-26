@@ -30,6 +30,7 @@ try {
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
+  process.on('disconnect', shutdown);
   // Dev supervisor uses IPC on Windows, where kill(SIGTERM) is not graceful.
   process.on('message', message => { if (message === 'shutdown') { shutdown(); process.disconnect?.(); } });
 } catch (error) {

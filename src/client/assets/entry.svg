@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000">
+<rect width="1600" height="1000" fill="#fbfaf6"/>
+<g font-family="Segoe UI,Microsoft YaHei,sans-serif" fill="#344b3e"><text x="110" y="90" font-size="32" font-weight="700" letter-spacing="6">FORME.</text><g font-size="16" fill="#7f8b7a"><text x="675" y="85">日常器物</text><text x="830" y="85">关于我们</text><text x="985" y="85">灵感手记</text></g><text x="1410" y="85" font-size="17">购物袋　0</text></g>
+<path d="M100 128H1500" stroke="#e6e7de"/>
+<rect x="820" y="185" width="670" height="590" rx="4" fill="#e4e9dc"/>
+<ellipse cx="1180" cy="685" rx="224" ry="35" fill="#cbd4bc"/>
+<path d="M1198 345c-110 0-143 95-138 175 4 79 16 149 44 169h197c28-20 40-90 44-169 5-80-28-175-147-175z" fill="#c6ad8c"/>
+<ellipse cx="1202" cy="346" rx="75" ry="15" fill="#ad9472"/><path d="M1160 369c-50 81-49 222-18 308" fill="none" stroke="#d7c4ab" stroke-width="9" opacity=".6"/>
+<path d="M1194 349c-35-93-8-168-53-212M1209 347c51-110 50-189 108-216" fill="none" stroke="#7e9166" stroke-width="7"/>
+<g fill="#869b70"><ellipse cx="1144" cy="191" rx="41" ry="15" transform="rotate(36 1144 191)"/><ellipse cx="1180" cy="246" rx="47" ry="17" transform="rotate(-33 1180 246)"/><ellipse cx="1266" cy="211" rx="49" ry="17" transform="rotate(-28 1266 211)"/><ellipse cx="1260" cy="285" rx="42" ry="14" transform="rotate(29 1260 285)"/></g>
+<rect x="923" y="581" width="140" height="108" rx="7" fill="#f2eee2"/><ellipse cx="993" cy="583" rx="70" ry="15" fill="#fffdf4"/><path d="M1063 601c68-5 68 68 0 63" fill="none" stroke="#f4f0e5" stroke-width="17"/>
+<g font-family="Segoe UI,Microsoft YaHei,sans-serif"><text x="110" y="240" fill="#879573" font-size="17" letter-spacing="7">THOUGHTFULLY MADE, EVERY DAY.</text><g fill="#354b3c" font-size="76" font-weight="500"><text x="105" y="370">给日常，</text><text x="105" y="475">留一点空白。</text></g><g fill="#909a88" font-size="21"><text x="111" y="550">一些刚刚好的器物，一种慢下来的生活。</text><text x="111" y="588">让平凡的片刻，也值得被认真对待。</text></g><rect x="110" y="650" width="240" height="66" rx="2" fill="#416246"/><text x="168" y="693" fill="#fff" font-size="20">探索日常　→</text><text x="110" y="846" font-size="13" letter-spacing="4" fill="#9ca58f">LESS, BUT BETTER.</text><text x="110" y="911" fill="#63765b" font-size="27">为生活挑选的好物</text><text x="1300" y="909" fill="#8b987d" font-size="17">查看全部　↗</text></g>
+<path d="M110 949H1490" stroke="#e4e7db"/>
+</svg>

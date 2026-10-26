@@ -1,0 +1,207 @@
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, shallowRef, watch } from 'vue';
+import { z } from 'zod';
+import { workbenchApi } from '../http/workbench-api';
+import { RequestFailure } from '../http/review-api';
+import { createWorkingCopy } from './working-copy';
+import { labelMarkers } from '../../shared/marker-labels';
+import { createToast } from './toast';
+import { createLocalPreview, type PreviewDependencies } from '../local-preview';
+import type { WorkbenchApi } from '../http/workbench-api';
+import { userSchema, type User, type Library, type HistoryDetail, type Revision, type LibraryItem } from '../../shared/workbench-contracts';
+import type { LocalMarker } from '../review-session';
+import { previewFileError, type Point } from '../review';
+import type { ViewSnapshot } from '../review-view';
+
+const activeKey = 'image-review:username:active'; const rememberedKey = 'image-review:username:remembered';
+const viewSchema = z.object({ mode: z.enum(['fit', 'manual']), manualScale: z.number().min(0.1).max(4), markerSize: z.number().min(12).max(48), anchor: z.object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1) }) });
+export function useWorkbench(deps: { api?: WorkbenchApi; preview?: Partial<PreviewDependencies> } = {}) {
+  const api = deps.api ?? workbenchApi(); const copy = createWorkingCopy(); const draft = copy.state;
+  const user = ref<User | null>(null); const username = ref(''); const page = ref<'entry' | 'library' | 'review' | 'history'>('entry');
+  const libraryBusy = ref(false); const libraryWarning = ref(''); const toast = createToast();
+  const busy = ref(false); const error = ref(''); const requestId = ref(''); const cacheWarning = ref('');
+  const query = ref(''); const sort = ref('updated'); const layout = ref<'grid' | 'list'>('grid');
+  const library = ref<Library>({ items: [], total: 0, page: 1, pageSize: 12 });
+  const history = ref<Revision[]>([]); const historyTotal = ref(0); const historyPage = ref(1); const historical = ref<HistoryDetail | null>(null);
+  const historySelected = ref<string | null>(null); const dialog = ref(false); const showChanges = ref(false); const historyExpandedIds = ref<string[]>([]);
+  const expandedIds = ref<string[]>([]);
+  const focusRevision = ref(0);
+  const uploadPending = shallowRef<{ id: string; file: File } | null>(null);
+  const stage = shallowRef<{ reveal(point: Point): Promise<void>; restoreView(view: ViewSnapshot): Promise<void> }>();
+  const preview = createLocalPreview(deps.preview); const image = preview.state;
+  let disposed = false; let listGeneration = 0; let pendingNavigation: (() => Promise<void>) | null = null;
+  const locked = computed(() => busy.value || copy.blocked() || image.loading);
+  const blocked = computed(() => locked.value || !!uploadPending.value);
+  const selected = computed(() => draft.markers.find(row => row.id === draft.selectedId) ?? null);
+  const currentImage = computed(() => draft.base?.image ?? null);
+  const errorText = computed(() => error.value || draft.error || image.error);
+  const errorRequestId = computed(() => requestId.value || draft.requestId);
+  const rail = computed<LibraryItem[]>(() => {
+    const rows = library.value.items; const detail = draft.base;
+    if (!detail || rows.some(row => row.image.id === detail.image.id)) return rows;
+    const summary = draft.savedItem?.image.id === detail.image.id ? draft.savedItem : { image: detail.image, annotationCount: detail.annotations.length, revisionCount: detail.revision.versionNumber + 1, username: detail.revision.username, uploadedByUserId: detail.revision.userId };
+    return [summary, ...rows];
+  });
+  const activeMarkers = computed(() => labelMarkers(draft.markers.filter(row => !draft.removed.includes(row.id))));
+  const removedMarkers = computed(() => draft.markers.filter(row => draft.removed.includes(row.id)));
+  const historyMarkers = computed(() => labelMarkers(historical.value?.annotations ?? []));
+  function changeLabel(id: string, before = false) {
+    const rows = before ? labelMarkers(historical.value?.previousAnnotations ?? []) : historyMarkers.value;
+    return rows.find(row => row.id === id)?.label ?? '—';
+  }
+  const stageMarkers = computed<LocalMarker[]>(() => {
+    if (page.value === 'history' && historical.value) {
+      const data = historical.value; const changed = new Map(data.changes.map(row => [row.annotationId, row.kind]));
+      const rows: LocalMarker[] = historyMarkers.value.map(row => ({ ...row, saved: row, change: showChanges.value ? changed.get(row.id) : undefined }));
+      if (showChanges.value) for (const row of labelMarkers(data.previousAnnotations ?? [])) {
+        if (changed.get(row.id) === 'delete') rows.push({ ...row, saved: row, change: 'delete' });
+      }
+      return rows;
+    }
+    return activeMarkers.value.map(row => ({ ...row, saved: copy.old(row.id), change: copy.kind(row.id) ?? undefined }));
+  });
+  function report(value: unknown) { error.value = value instanceof Error ? value.message : '操作失败，请重试'; requestId.value = value instanceof RequestFailure ? value.requestId : ''; }
+  function read(kind: 'local' | 'session', key: string) { try { return (kind === 'local' ? window.localStorage : window.sessionStorage).getItem(key); } catch { cacheWarning.value = '浏览器缓存不可用，请注意保存并保留图片链接'; return null; } }
+  function write(kind: 'local' | 'session', key: string, value: string | null) { try { const storage = kind === 'local' ? window.localStorage : window.sessionStorage; if (value === null) storage.removeItem(key); else storage.setItem(key, value); } catch { cacheWarning.value = '浏览器缓存写入失败，当前输入仍在页面，正式保存结果不受影响'; } }
+  function url(imageId?: string, revisionId?: string) {
+    const value = new URL(location.href); value.search = ''; if (imageId) value.searchParams.set('imageId', imageId); if (revisionId) value.searchParams.set('revisionId', revisionId);
+    window.history.replaceState(null, '', value);
+  }
+  watch(() => copy.snapshot(), value => { const id = draft.base?.image.id; if (id) write('session', 'image-review:draft:' + id, value); }, { flush: 'post' });
+  async function loadLibrary(targetPage = 1, afterSave = false) {
+    const generation = ++listGeneration; libraryBusy.value = true; libraryWarning.value = '';
+    if (!afterSave) { error.value = ''; requestId.value = ''; }
+    try { const value = await api.library(query.value, targetPage, sort.value); if (!disposed && generation === listGeneration) library.value = value; }
+    catch (value) { if (generation === listGeneration && !disposed) { if (afterSave) libraryWarning.value = '已保存，列表更新失败，可重试'; else report(value); } }
+    finally { if (generation === listGeneration) libraryBusy.value = false; }
+  }
+  async function loadImage(id: string) {
+    busy.value = true; error.value = ''; requestId.value = ''; draft.message = '';
+    try {
+      const detail = await api.detail(id); const file = await api.content(id, detail.image.originalName, detail.image.mimeType);
+      if (disposed) return false;
+      await preview.select(file); if (!image.image || image.error) throw new Error(image.error || '图片读取失败');
+      copy.bind(detail);
+      const cached = read('session', 'image-review:draft:' + id);
+      if (cached) {
+        try { copy.restore(cached, id); if (draft.base!.revision.id !== detail.revision.id) error.value = '已保留较早版本的未保存输入，请核对后重新加载；不会自动覆盖已保存内容'; }
+        catch { cacheWarning.value = '这张图片的临时缓存无法恢复，已读取服务端正式内容'; }
+      }
+      expandedIds.value = [];
+      page.value = 'review'; historical.value = null; url(id); await nextTick();
+      const savedView = read('session', 'image-review:view:' + id);
+      if (savedView) { try { await stage.value?.restoreView(viewSchema.parse(JSON.parse(savedView))); } catch { /* An invalid view does not invalidate saved data. */ } }
+      return true;
+    } catch (value) { report(value); return false; }
+    finally { busy.value = false; }
+  }
+  async function enter() {
+    if (busy.value) return;
+    if (!username.value.trim() || username.value.trim().length > 40) { error.value = '请输入 1–40 字符的 username'; return; }
+    busy.value = true; error.value = '';
+    try {
+      let remembered: User | null = null;
+      try { const raw = read('local', rememberedKey); if (raw) remembered = userSchema.parse(JSON.parse(raw)); } catch { /* A remembered label is optional. */ }
+      let active: User | null = null;
+      try { const raw = read('session', activeKey); if (raw) active = userSchema.parse(JSON.parse(raw)); } catch { /* An invalid old entry must not prevent re-entry. */ }
+      const label = username.value.trim();
+      const identity = active?.username === label ? active : remembered?.username === label ? remembered : null;
+      user.value = await api.enter(label, identity?.userId);
+      write('local', rememberedKey, JSON.stringify(user.value)); write('session', activeKey, JSON.stringify(user.value));
+      page.value = 'library';
+    } catch (value) { report(value); return; }
+    finally { busy.value = false; }
+    await loadLibrary(); const params = new URL(location.href).searchParams; const id = params.get('imageId');
+    if (id) { const opened = await loadImage(id); if (params.get('revisionId') && opened) await openHistory(params.get('revisionId')!); }
+  }
+  async function navigate(action: () => Promise<void>) {
+    if (blocked.value || dialog.value) return;
+    if (copy.count()) { pendingNavigation = action; dialog.value = true; } else await action();
+  }
+  async function toLibrary() { await navigate(async () => { page.value = 'library'; url(); await loadLibrary(); }); }
+  async function openImage(id: string) { if (id === currentImage.value?.id && page.value !== 'library') { page.value = 'review'; return; } await navigate(async () => { await loadImage(id); }); }
+  async function save() {
+    if (!user.value || busy.value) return false;
+    if (!copy.count() && !draft.pending) return true;
+    error.value = ''; requestId.value = '';
+    const previousRevision = draft.base?.revision.id;
+    const success = await copy.save(user.value.userId, api.save);
+    if (!success && !draft.pending && draft.selectedId) { if (!expandedIds.value.includes(draft.selectedId)) expandedIds.value.push(draft.selectedId); focusRevision.value++; }
+    if (success && draft.base) {
+      expandedIds.value = [];
+      const detail = draft.base;
+      const cached = library.value.items.find(row => row.image.id === detail.image.id);
+      const item = draft.savedItem ?? { image: detail.image, annotationCount: detail.annotations.length, revisionCount: (cached?.revisionCount ?? 1) + (previousRevision !== detail.revision.id ? 1 : 0), username: detail.revision.username, uploadedByUserId: cached?.uploadedByUserId ?? detail.revision.userId };
+      library.value.items = library.value.items.map(row => row.image.id === item.image.id ? item : row);
+      toast.show(draft.message || '修改已保存');
+      void loadLibrary(library.value.page, true);
+    }
+    if (success && dialog.value) {
+      const action = pendingNavigation; pendingNavigation = null; dialog.value = false; if (action) await action();
+    }
+    return success;
+  }
+  async function resolveLeave(choice: 'save' | 'discard' | 'stay') {
+    if (choice === 'stay' && !draft.busy) { dialog.value = false; pendingNavigation = null; return; }
+    if (choice === 'save') { await save(); return; }
+    if (blocked.value) return;
+    if (draft.base) copy.bind(draft.base);
+    const action = pendingNavigation; pendingNavigation = null; dialog.value = false; if (action) await action();
+  }
+  async function switchUser() { await navigate(async () => { write('session', activeKey, null); user.value = null; page.value = 'entry'; username.value = ''; url(); }); }
+  async function upload(file?: File) {
+    if (!user.value || locked.value) return;
+    if (!uploadPending.value) { if (!file) return; const invalid = previewFileError(file); if (invalid) { error.value = invalid; return; } uploadPending.value = { id: crypto.randomUUID(), file }; }
+    busy.value = true; error.value = ''; requestId.value = '';
+    try {
+      const pending = uploadPending.value; const saved = await api.upload(pending.id, pending.file, user.value.userId);
+      uploadPending.value = null; await loadLibrary(); await loadImage(saved.id);
+    } catch (value) { report(value); if (value instanceof RequestFailure && value.status !== null) uploadPending.value = null; }
+    finally { busy.value = false; }
+  }
+  function abandonUpload() { if (!busy.value && window.confirm('上传结果尚未确认，服务器可能已有图片。放弃等待并返回图片库？')) uploadPending.value = null; }
+  async function reload() { await navigate(async () => { if (currentImage.value) await loadImage(currentImage.value.id); }); }
+  async function historyList(more = false) {
+    if (!currentImage.value) return;
+    const next = more ? historyPage.value + 1 : 1;
+    const list = await api.history(currentImage.value.id, next);
+    history.value = more ? [...history.value, ...list.items] : list.items; historyTotal.value = list.total; historyPage.value = next;
+  }
+  async function openHistory(revisionId?: string) {
+    if (blocked.value || !currentImage.value) return;
+    busy.value = true; error.value = '';
+    try {
+      await historyList(); const id = revisionId ?? history.value[0]?.id;
+      if (id) { historical.value = await api.historical(currentImage.value.id, id); page.value = 'history'; historySelected.value = null; historyExpandedIds.value = []; showChanges.value = false; url(currentImage.value.id, id); }
+    } catch (value) { report(value); } finally { busy.value = false; }
+  }
+  async function selectHistory(id: string) {
+    if (busy.value || !currentImage.value) return; busy.value = true; error.value = '';
+    try { historical.value = await api.historical(currentImage.value.id, id); historySelected.value = null; historyExpandedIds.value = []; showChanges.value = false; url(currentImage.value.id, id); }
+    catch (value) { report(value); } finally { busy.value = false; }
+  }
+  async function moreHistory() { if (busy.value) return; busy.value = true; try { await historyList(true); } catch (value) { report(value); } finally { busy.value = false; } }
+  function backToReview() { page.value = 'review'; expandedIds.value = []; if (currentImage.value) url(currentImage.value.id); }
+  async function selectMarker(id: string) {
+    if (locked.value) return;
+    if (page.value === 'history') { historySelected.value = id; if (!historyExpandedIds.value.includes(id)) historyExpandedIds.value.push(id); } else { draft.selectedId = id; if (!expandedIds.value.includes(id)) expandedIds.value.push(id); focusRevision.value++; }
+    const point = stageMarkers.value.find(row => row.id === id); if (point) { await nextTick(); await stage.value?.reveal(point); }
+  }
+  function toggle(id: string) {
+    if (locked.value) return;
+    const expanded = page.value === 'history' ? historyExpandedIds : expandedIds;
+    if (expanded.value.includes(id)) expanded.value = expanded.value.filter(value => value !== id); else void selectMarker(id);
+  }
+  function place(point: Point) { if (page.value === 'review' && !blocked.value) { copy.place(point); if (draft.selectedId && !expandedIds.value.includes(draft.selectedId)) expandedIds.value.push(draft.selectedId); } }
+  function saveView(view: ViewSnapshot) { if (currentImage.value && page.value === 'review') write('session', 'image-review:view:' + currentImage.value.id, JSON.stringify(view)); }
+  function beforeUnload(event: BeforeUnloadEvent) { if (copy.count() || draft.pending || uploadPending.value) { event.preventDefault(); event.returnValue = ''; } }
+  async function copyLink() { try { await navigator.clipboard.writeText(location.href); toast.show('图片链接已复制'); } catch { error.value = '复制失败，请从地址栏复制当前图片链接'; } }
+  onMounted(async () => {
+    window.addEventListener('beforeunload', beforeUnload);
+    try {
+      const remembered = read('local', rememberedKey); if (remembered) username.value = userSchema.parse(JSON.parse(remembered)).username;
+      const active = read('session', activeKey); if (active) { const current = userSchema.parse(JSON.parse(active)); username.value = current.username; await enter(); }
+    } catch { cacheWarning.value = '上次进入状态无法恢复，请重新输入 username'; }
+  });
+  onUnmounted(() => { disposed = true; listGeneration++; toast.dismiss(); preview.dispose(); window.removeEventListener('beforeunload', beforeUnload); });
+  return reactive({ page, user, username, busy, libraryBusy, libraryWarning, notice: toast.state, dismissToast: toast.dismiss, errorText, errorRequestId, cacheWarning, query, sort, layout, library, history, historyTotal, historical, historySelected, dialog, showChanges, historyExpandedIds, historyMarkers, changeLabel, activeMarkers, removedMarkers, expandedIds, focusRevision, uploadPending, stage, image, copy, draft, locked, blocked, selected, currentImage, rail, stageMarkers, enter, loadLibrary, toLibrary, openImage, save, resolveLeave, switchUser, upload, abandonUpload, reload, openHistory, selectHistory, moreHistory, backToReview, selectMarker, toggle, place, saveView, copyLink });
+}

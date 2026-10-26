@@ -1,516 +1,814 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
-import { readySchema, errorSchema } from '../shared/contracts';
-import { createLocalPreview } from './local-preview';
-import { noteState, type Point } from './review';
-import { createReviewSession } from './review-session';
+import { computed, nextTick, ref, watch, watchEffect } from 'vue';
 import ImageStage from './ImageStage.vue';
-import { defaultView, type ViewSnapshot } from './review-view';
-import { createTabSession } from './tab-session';
-
-const session = createReviewSession();
-const review = session.state;
-const restoringSession = ref(true);
-const cacheStatus = ref<'idle' | 'saving' | 'ready' | 'error'>('idle');
-const cacheError = ref('');
-const viewState = ref<ViewSnapshot>({ ...defaultView, anchor: { ...defaultView.anchor } });
-let tabSession: ReturnType<typeof createTabSession> | undefined;
-let cacheRevision = 0;
-const stage = ref<InstanceType<typeof ImageStage>>();
-const noteInput = ref<HTMLTextAreaElement>();
-const list = ref<HTMLDivElement>();
-const dialog = ref<HTMLDialogElement>();
-let returnFocus: HTMLElement | null = null;
-const preview = createLocalPreview({
-  canReplace: () => !review.pending && !review.deleteId && (!session.hasContent() || window.confirm('更换或清除图片会丢弃本次预览的全部临时标记和草稿。这些内容尚未保存。确定继续吗？')),
-  onReplace: () => session.reset(),
-});
-const imageState = preview.state;
-const noteStatus = computed(() => noteState(review.draft?.note ?? ''));
-const selected = computed(() => review.markers.find(marker => marker.id === review.selectedId));
-const hasDialog = computed(() => review.pending !== null || review.deleteId !== null);
-const locked = computed(() => imageState.loading || hasDialog.value || restoringSession.value);
-watch(() => imageState.loading, loading => { review.locked = loading; }, { flush: 'sync' });
-
-function chooseImage(event: Event) {
-  const input = event.target as HTMLInputElement;
-  const file = input.files?.[0];
-  input.value = '';
-  if (file) void preview.select(file);
+import SortMenu from './components/SortMenu.vue';
+import type { WorkingMarker } from '../shared/workbench-contracts';
+import { useWorkbench } from './state/use-workbench';
+import entryArt from './assets/entry.svg';
+const w = useWorkbench();
+const imageStage = ref<InstanceType<typeof ImageStage>>();
+const leaveDialog = ref<HTMLDialogElement>(); const fileInput = ref<HTMLInputElement>();
+watchEffect(() => { w.stage = imageStage.value; });
+const avatar = computed(() => Array.from(w.user?.username ?? '')[0] ?? '');
+const severityText = (value: string) => ({ low: '低', medium: '中', high: '高' })[value] ?? value;
+const changeText = (value: string | null) => ({ add: '新增', modify: '已修改', delete: '待删除' })[value ?? ''] ?? '';
+const time = (value?: string) => value ? new Date(value).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }) : '';
+const counts = computed(() => ({ add: w.draft.markers.filter(row => w.copy.kind(row.id) === 'add').length, modify: w.draft.markers.filter(row => w.copy.kind(row.id) === 'modify').length, delete: w.draft.removed.length }));
+const versionName = (revision?: { versionNumber: number; kind: string }) => !revision ? '' : revision.versionNumber > 0 ? `V${revision.versionNumber}` : revision.kind === 'import' ? '导入记录' : '原始图片';
+function setSize(row: WorkingMarker, event: Event) {
+  const input = event.target as HTMLInputElement; const value = Number(input.value);
+  row.size = Number.isFinite(value) ? Math.round(Math.max(12, Math.min(48, value))) : row.size ?? 24;
+  input.value = String(row.size);
 }
-async function persistSession() {
-  if (restoringSession.value || !tabSession) return;
-  const image = imageState.image;
-  const current = ++cacheRevision;
-  cacheStatus.value = image ? 'saving' : 'idle';
-  try {
-    if (image) await tabSession.save({ image: { name: image.name, type: image.file.type, size: image.file.size, width: image.width, height: image.height }, review: session.snapshot(), view: viewState.value }, image.file);
-    else await tabSession.clear();
-    if (current === cacheRevision) { cacheStatus.value = image ? 'ready' : 'idle'; cacheError.value = ''; }
-  } catch {
-    if (current === cacheRevision) { cacheStatus.value = 'error'; cacheError.value = '标签页缓存不可用或空间不足，当前内容仍在页面中，但最近修改尚不能保证刷新恢复。请重试，或保持此页面打开。'; }
-  }
-}
-function updateView(value: ViewSnapshot) { if (!restoringSession.value) viewState.value = value; }
-async function clearPreview() {
-  if (restoringSession.value) return;
-  preview.clear();
-  if (!imageState.image && !imageState.loading) await persistSession();
-}
-async function retryCache() {
-  try { tabSession ??= createTabSession(); await persistSession(); }
-  catch { cacheStatus.value = 'error'; cacheError.value = '浏览器拒绝使用标签页缓存；当前内容仅保留在此页面，请保持页面打开。'; }
-}
-watch([() => imageState.image, review, viewState], () => { void persistSession(); }, { deep: true, flush: 'post' });
-async function syncSelection(focusEditor = false) {
+function openLink(event: MouseEvent, id: string) { if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return; event.preventDefault(); void w.openImage(id); }
+function chooseFile(event: Event) { const input = event.target as HTMLInputElement; const file = input.files?.[0]; input.value = ''; if (file) void w.upload(file); }
+let previousFocus: HTMLElement | null = null;
+watch(() => [w.draft.selectedId, w.focusRevision, w.dialog], async () => {
+  if (w.page !== 'review' || w.dialog || !w.draft.selectedId) return;
   await nextTick();
-  const point = review.draft ?? selected.value;
-  if (point) void stage.value?.reveal(point);
-  if (review.selectedId) {
-    const row = list.value?.querySelector<HTMLElement>(`[data-marker-id="${review.selectedId}"]`);
-    if (row && list.value) {
-      const top = row.getBoundingClientRect().top - list.value.getBoundingClientRect().top + list.value.scrollTop;
-      if (top < list.value.scrollTop || top + row.offsetHeight > list.value.scrollTop + list.value.clientHeight) list.value.scrollTop = top;
-    }
+  const field = document.getElementById(`note-${w.draft.selectedId}`) as HTMLTextAreaElement | null;
+  const list = field?.closest<HTMLElement>('.marker-list');
+  if (field && list && w.expandedIds.includes(w.draft.selectedId!)) {
+    const rectangle = field.getBoundingClientRect(); const bounds = list.getBoundingClientRect();
+    if (rectangle.top < bounds.top || rectangle.bottom > bounds.bottom) list.scrollTop += rectangle.top - bounds.top - 16;
+    field.focus({ preventScroll: true });
   }
-  if (focusEditor && review.draft && !review.pending) noteInput.value?.focus({ preventScroll: true });
-}
-function place(point: Point) {
-  if (!imageState.image || locked.value) return;
-  session.request({ kind: 'place', point });
-  if (!review.pending) void syncSelection(true);
-}
-function select(id: string, toggle = false) {
-  if (locked.value) return;
-  if (toggle && review.expandedIds.includes(id)) { session.setExpanded(id, false); return; }
-  session.request({ kind: 'select', id });
-  if (!review.pending) { session.setExpanded(id, true); void syncSelection(); }
-}
-function edit(id: string) {
-  session.request({ kind: 'edit', id });
-  if (!review.pending) void syncSelection(true);
-}
-function apply() {
-  if (!locked.value && session.applyDraft()) void syncSelection();
-}
-function resolvePending(choice: 'apply' | 'discard' | 'stay') {
-  session.resolvePending(choice);
-  if (!review.pending && choice !== 'stay') {
-    if (review.selectedId) session.setExpanded(review.selectedId, true);
-    void syncSelection(Boolean(review.draft));
-  }
-}
-function resolveDelete(confirmed: boolean) {
-  session.resolveDelete(confirmed);
-}
-function dismissDialog() {
-  if (review.pending) resolvePending('stay');
-  else resolveDelete(false);
-}
-watch(hasDialog, async open => {
-  if (open) returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+});
+watch(() => w.dialog, async value => {
+  if (value) previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   await nextTick();
-  if (open) {
-    dialog.value?.showModal();
-  } else {
-    dialog.value?.close();
-    if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
-    else list.value?.focus({ preventScroll: true });
-    returnFocus = null;
-  }
+  if (value) leaveDialog.value?.showModal(); else { leaveDialog.value?.close(); if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true }); }
 });
-const hasUncachedContent = computed(() => (Boolean(imageState.image) || session.hasContent()) && cacheStatus.value !== 'ready');
-function beforeUnload(event: BeforeUnloadEvent) { event.preventDefault(); event.returnValue = ''; }
-watch(hasUncachedContent, active => {
-  if (active) window.addEventListener('beforeunload', beforeUnload);
-  else window.removeEventListener('beforeunload', beforeUnload);
-});
-
-const serviceState = ref<'checking' | 'ready' | 'unavailable'>('checking');
-const requestId = ref('');
-let controller: AbortController | undefined;
-async function check() {
-  controller?.abort();
-  controller = new AbortController();
-  const active = controller;
-  serviceState.value = 'checking';
-  requestId.value = '';
-  const timer = setTimeout(() => active.abort(), 5000);
-  try {
-    const response = await fetch('/api/ready', { signal: active.signal, cache: 'no-store' });
-    const body: unknown = await response.json();
-    if (active !== controller) return;
-    if (!response.ok) {
-      const parsed = errorSchema.safeParse(body);
-      if (parsed.success) requestId.value = parsed.data.error.requestId;
-      throw new Error('Unavailable');
-    }
-    readySchema.parse(body);
-    serviceState.value = 'ready';
-  } catch { if (active === controller) serviceState.value = 'unavailable'; }
-  finally { clearTimeout(timer); }
-}
-onMounted(async () => {
-  void check();
-  try {
-    tabSession = createTabSession();
-    const restored = await tabSession.load();
-    if (restored) {
-      await preview.select(restored.file);
-      if (!imageState.image || imageState.error) throw new Error('Session image unavailable');
-      session.restore(restored.snapshot.review);
-      viewState.value = restored.snapshot.view;
-      await nextTick();
-      await stage.value?.restoreView(restored.snapshot.view);
-      cacheStatus.value = 'ready';
-    }
-  } catch {
-    cacheStatus.value = 'error';
-    cacheError.value = '标签页缓存无法读取，或图片缓存已不可用。可重新选择图片继续；清除预览可移除当前会话缓存。';
-  } finally { restoringSession.value = false; }
-});
-onUnmounted(() => { controller?.abort(); preview.dispose(); tabSession?.close(); window.removeEventListener('beforeunload', beforeUnload); });
 </script>
 
 <template>
-  <main>
-    <p class="eyebrow">
-      IMAGE REVIEW ANNOTATOR · P3
-    </p>
-    <h1>审图打点</h1>
-    <p class="intro">
-      点击问题位置，添加说明；从标记列表展开、定位和编辑。
-    </p>
-    <p class="notice">
-      图片和标记仅缓存在当前标签页，尚未上传或正式保存。同一标签页刷新可恢复，普通关闭后重新打开不再恢复；收起说明不会丢失内容。
-    </p>
-    <p
-      v-if="restoringSession"
-      role="status"
+  <main
+    v-if="w.page === 'entry'"
+    class="entry-shell"
+  >
+    <section class="entry-story">
+      <div class="brand">
+        <span
+          class="brand-mark"
+          aria-hidden="true"
+        />审图工作台
+      </div>
+      <div class="entry-copy">
+        <h1>让每一处反馈，<br>都落在准确的位置。</h1><div class="entry-mock">
+          <img
+            :src="entryArt"
+            alt="图片审阅示意"
+          >
+        </div>
+      </div>
+    </section>
+    <section
+      class="entry-form-area"
+      aria-labelledby="entry-title"
     >
-      正在恢复标签页会话…
-    </p>
-    <p
-      v-else-if="cacheStatus === 'saving'"
-      role="status"
-    >
-      正在缓存本次审阅，完成前请保持页面打开…
-    </p>
-    <p
-      v-else-if="cacheStatus === 'ready'"
-      class="muted"
-    >
-      已缓存到当前标签页，可刷新恢复；关闭后新页面无法恢复。此缓存不等于服务端保存。
-    </p>
-    <div
-      v-if="cacheError"
-      role="alert"
-      class="cache-error"
-    >
-      <p class="error">
-        {{ cacheError }}
-      </p>
-      <button
-        class="secondary"
-        :disabled="restoringSession || hasDialog"
-        @click="retryCache"
+      <form
+        class="entry-card"
+        @submit.prevent="w.enter"
       >
-        重试会话缓存
+        <h2 id="entry-title">
+          开始一次审阅
+        </h2>
+        <div class="entry-field">
+          <label for="username">Username / 昵称</label><input
+            id="username"
+            v-model="w.username"
+            class="entry-input"
+            maxlength="40"
+            autocomplete="nickname"
+            autofocus
+            :disabled="w.busy"
+            required
+          >
+        </div>
+        <p
+          v-if="w.errorText"
+          class="error inline-error"
+          role="alert"
+        >
+          {{ w.errorText }}
+        </p><button
+          class="btn primary entry-submit"
+          type="submit"
+          :disabled="w.busy"
+        >
+          {{ w.busy ? '正在进入…' : '进入工作台 →' }}
+        </button>
+      </form>
+    </section>
+  </main>
+  <template v-else>
+    <header class="topbar">
+      <button
+        class="brand brand-button"
+        :disabled="w.blocked"
+        @click="w.toLibrary"
+      >
+        <span
+          class="brand-mark"
+          aria-hidden="true"
+        />审图工作台
+      </button><div class="breadcrumb">
+        <span>共享工作空间</span><span>/</span><strong>{{ w.page === 'library' ? '图片库' : w.page === 'history' ? '查看历史' : '图片审阅' }}</strong>
+      </div><div class="grow" />
+      <details class="user-menu">
+        <summary class="user">
+          <span class="avatar">{{ avatar }}</span><span><span class="tiny">当前 username </span>{{ w.user?.username }}</span><span class="chevron">⌄</span>
+        </summary><div class="user-dropdown">
+          <p class="tiny">
+            当前操作人
+          </p><p class="wrap">
+            {{ w.user?.username }}
+          </p><button
+            class="btn"
+            :disabled="w.blocked"
+            @click="w.switchUser"
+          >
+            切换 username
+          </button>
+        </div>
+      </details>
+    </header>
+    <div
+      v-if="w.busy || w.draft.busy || w.libraryBusy"
+      class="progress-line"
+      role="status"
+    >
+      {{ w.draft.busy ? '正在保存本次修改…' : '正在读取…' }}
+    </div>
+    <div
+      v-if="w.errorText || w.draft.pending || w.uploadPending"
+      class="feedback error-feedback"
+      role="alert"
+    >
+      <p class="wrap">
+        {{ w.errorText || '上次请求结果尚未确认，输入已保留。' }}
+      </p><details v-if="w.errorRequestId">
+        <summary>请求编号</summary><code>{{ w.errorRequestId }}</code>
+      </details>
+      <button
+        v-if="w.draft.pending"
+        class="btn"
+        :disabled="w.busy || w.draft.busy"
+        @click="w.save"
+      >
+        用原请求确认保存结果
+      </button>
+      <template v-else-if="w.uploadPending">
+        <button
+          class="btn"
+          :disabled="w.busy"
+          @click="w.upload()"
+        >
+          用原文件重试上传
+        </button><button
+          class="btn subtle"
+          :disabled="w.busy"
+          @click="w.abandonUpload"
+        >
+          放弃等待
+        </button>
+      </template>
+      <button
+        v-else-if="w.page === 'library'"
+        class="btn"
+        :disabled="w.busy"
+        @click="w.loadLibrary(w.library.page)"
+      >
+        重新读取图片库
+      </button><button
+        v-else
+        class="btn"
+        :disabled="w.blocked"
+        @click="w.reload"
+      >
+        重新加载已保存数据
       </button>
     </div>
-    <section aria-labelledby="preview-heading">
-      <div class="section-heading">
-        <h2 id="preview-heading">
-          单图审阅
-        </h2>
-        <span class="muted">{{ review.markers.length }} 个临时标记</span>
-      </div>
-      <div class="toolbar">
-        <label class="file-picker">选择本地图片
-          <input
-            type="file"
-            accept="image/png,image/jpeg,image/webp"
-            :disabled="hasDialog || restoringSession"
-            @change="chooseImage"
-          >
-        </label>
-        <button
-          v-if="imageState.image || imageState.loading || cacheError"
-          class="secondary"
-          :disabled="hasDialog || restoringSession"
-          @click="clearPreview"
+    <div
+      class="toast-region"
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+    >
+      <div
+        v-if="w.notice.message"
+        class="toast"
+      >
+        <span aria-hidden="true">✓</span><span>{{ w.notice.message }}</span><button
+          aria-label="关闭提示"
+          @click="w.dismissToast"
         >
-          清除预览
+          ×
         </button>
       </div>
-      <p class="muted">
-        PNG / JPEG / WebP，每张最多 20 MiB。
-      </p>
-      <p
-        v-if="imageState.error"
-        role="alert"
-        class="error"
+    </div>
+    <p
+      v-if="w.libraryWarning"
+      class="cache-warning"
+      role="status"
+    >
+      {{ w.libraryWarning }}<button
+        class="btn"
+        :disabled="w.libraryBusy"
+        @click="w.loadLibrary(w.library.page, true)"
       >
-        {{ imageState.error }}
-      </p>
-      <p
-        v-if="imageState.loading"
-        role="status"
+        重试列表
+      </button>
+    </p>
+    <p
+      v-if="w.cacheWarning"
+      class="cache-warning"
+      role="status"
+    >
+      {{ w.cacheWarning }}
+    </p>
+    <div
+      v-if="w.page === 'library'"
+      class="app-layout"
+    >
+      <aside
+        class="app-nav"
+        aria-label="图片导航"
       >
-        正在读取图片…
-      </p>
-      <template v-if="imageState.image">
-        <p class="image-name">
-          {{ imageState.image.name }} · {{ imageState.image.width }} × {{ imageState.image.height }}
-        </p>
-        <div class="review-layout">
-          <ImageStage
-            ref="stage"
-            :image="imageState.image"
-            :markers="review.markers"
-            :draft="review.draft"
-            :selected-id="review.selectedId"
-            :disabled="locked"
-            @place="place"
-            @select="select"
-            @view="updateView"
-          />
-          <aside
-            class="review-sidebar"
-            aria-label="标记列表和说明"
+        <button
+          class="nav-item active"
+          :disabled="w.blocked"
+          @click="w.query = ''; w.loadLibrary()"
+        >
+          <span aria-hidden="true">▦</span><span class="nav-text">全部图片</span><span class="nav-count">{{ w.library.total }}</span>
+        </button>
+      </aside>
+      <main class="library">
+        <div class="page-heading">
+          <div>
+            <h1>图片库 <span class="image-total">{{ w.library.total }} 张图片</span></h1>
+          </div><button
+            class="btn primary"
+            :disabled="w.blocked"
+            @click="fileInput?.click()"
           >
-            <div class="list-heading">
-              <h3>临时标记</h3>
+            ＋ 上传图片
+          </button><input
+            ref="fileInput"
+            type="file"
+            class="visually-hidden"
+            accept="image/png,image/jpeg,image/webp"
+            :disabled="w.blocked"
+            @change="chooseFile"
+          >
+        </div>
+        <div class="tools">
+          <form
+            class="row search-form"
+            @submit.prevent="w.loadLibrary()"
+          >
+            <label class="search"><span aria-hidden="true">⌕</span><input
+              v-model="w.query"
+              type="search"
+              autocomplete="off"
+              placeholder="搜索图片名称…"
+              maxlength="255"
+              aria-label="搜索图片名称"
+              :disabled="w.blocked"
+            ></label><button
+              class="btn"
+              :disabled="w.blocked"
+            >
+              搜索
+            </button>
+          </form><div class="grow" /><SortMenu
+            v-model="w.sort"
+            :disabled="w.blocked"
+            @change="w.loadLibrary()"
+          /><div
+            class="segmented"
+            aria-label="图片布局"
+          >
+            <button
+              class="segment"
+              :class="{ active: w.layout === 'grid' }"
+              :aria-pressed="w.layout === 'grid'"
+              @click="w.layout = 'grid'"
+            >
+              网格
+            </button><button
+              class="segment"
+              :class="{ active: w.layout === 'list' }"
+              :aria-pressed="w.layout === 'list'"
+              @click="w.layout = 'list'"
+            >
+              列表
+            </button>
+          </div>
+        </div>
+        <section
+          class="library-grid"
+          :class="{ 'list-mode': w.layout === 'list' }"
+          aria-label="已保存图片"
+        >
+          <article
+            v-for="item in w.library.items"
+            :key="item.image.id"
+            class="image-card"
+          >
+            <a
+              :href="`?imageId=${item.image.id}`"
+              @click="openLink($event, item.image.id)"
+            ><div class="card-preview"><img
+              :src="`/api/images/${item.image.id}/content`"
+              :alt="item.image.originalName"
+              loading="lazy"
+            ></div><div class="card-body"><h2 class="card-title"><span
+              class="truncate"
+              :title="item.image.originalName"
+            >{{ item.image.originalName }}</span></h2><div class="card-meta"><span>{{ item.annotationCount }} 个标记</span><span>·</span><span>{{ Math.max(0, item.revisionCount - 1) }} 个版本</span><span>·</span><span>{{ item.image.width }}×{{ item.image.height }}</span></div><div class="card-footer"><span class="truncate">{{ item.username }}</span><span :title="item.image.updatedAt">{{ time(item.image.updatedAt) }}</span></div></div></a>
+          </article>
+        </section>
+        <div
+          v-if="!w.library.items.length && !w.busy"
+          class="empty-state"
+        >
+          <h2>{{ w.query ? '没有找到匹配的图片' : '上传你的第一张图片' }}</h2><p>{{ w.query ? '试试其他名称，或清空搜索。' : '图片保存后会集中出现在这里，随时打开继续审阅。' }}</p><button
+            v-if="!w.query"
+            class="btn primary"
+            :disabled="w.blocked"
+            @click="fileInput?.click()"
+          >
+            ＋ 上传图片
+          </button>
+        </div>
+        <footer class="library-footer">
+          <span>共 {{ w.library.total }} 张 · 第 {{ w.library.page }} 页</span><div class="pagination">
+            <button
+              class="btn"
+              :disabled="w.blocked || w.library.page <= 1"
+              @click="w.loadLibrary(w.library.page - 1)"
+            >
+              上一页
+            </button><button
+              class="btn"
+              :disabled="w.blocked || w.library.page * w.library.pageSize >= w.library.total"
+              @click="w.loadLibrary(w.library.page + 1)"
+            >
+              下一页
+            </button>
+          </div>
+        </footer>
+      </main>
+    </div>
+    <template v-else-if="w.currentImage && w.image.image">
+      <section class="review-header">
+        <div class="review-title">
+          <div class="row">
+            <button
+              class="btn back-button"
+              :disabled="w.blocked"
+              @click="w.toLibrary"
+            >
+              ← 返回图片库
+            </button><h1
+              class="truncate"
+              :title="w.currentImage.originalName"
+            >
+              {{ w.currentImage.originalName }}
+            </h1>
+          </div><p class="small muted">
+            {{ versionName(w.page === 'history' ? w.historical?.revision : w.draft.base?.revision) }} · {{ w.page === 'history' ? '保存于' : '上次保存' }} {{ time(w.page === 'history' ? w.historical?.revision.savedAt : w.draft.base?.revision.savedAt) }} · {{ w.page === 'history' ? w.historical?.revision.username : w.draft.base?.revision.username }}
+          </p>
+        </div>
+        <div class="review-actions">
+          <template v-if="w.page === 'review'">
+            <span
+              v-if="w.copy.count()"
+              class="pill amber"
+            >● 未保存 {{ w.copy.count() }} 项</span><span
+              v-else
+              class="pill green"
+            >已保存</span><button
+              class="btn subtle"
+              @click="w.copyLink"
+            >
+              复制链接
+            </button><button
+              class="btn"
+              :disabled="w.blocked"
+              @click="w.reload"
+            >
+              重新加载
+            </button><button
+              class="btn"
+              :disabled="w.blocked"
+              @click="w.openHistory()"
+            >
+              ◷ 查看历史
+            </button><button
+              class="btn primary"
+              :disabled="w.blocked || !w.copy.count()"
+              @click="w.save"
+            >
+              ✓ 保存修改
+            </button>
+          </template><template v-else>
+            <span class="pill gray">历史只读</span><button
+              class="btn primary"
+              :disabled="w.busy"
+              @click="w.backToReview"
+            >
+              返回当前工作副本
+            </button>
+          </template>
+        </div>
+      </section>
+      <main :class="w.page === 'history' ? 'history-layout' : 'workbench'">
+        <aside
+          v-if="w.page === 'review'"
+          class="image-rail"
+          aria-label="多图片列表"
+        >
+          <div class="rail-heading">
+            <span>图片 {{ w.library.total }}</span><button
+              class="plain-button"
+              :disabled="w.blocked"
+              @click="w.toLibrary"
+            >
+              图片库 ↗
+            </button>
+          </div><div class="rail-images">
+            <a
+              v-for="item in w.rail"
+              :key="item.image.id"
+              class="rail-image"
+              :class="{ selected: item.image.id === w.currentImage.id }"
+              :href="`?imageId=${item.image.id}`"
+              @click="openLink($event, item.image.id)"
+            ><img
+              class="rail-thumb"
+              :src="`/api/images/${item.image.id}/content`"
+              alt=""
+              loading="lazy"
+            ><div class="grow"><p
+              class="rail-name truncate"
+              :title="item.image.originalName"
+            >{{ item.image.originalName }}</p><p class="rail-meta">{{ item.annotationCount }} 个标记</p></div></a>
+          </div><div class="rail-paging">
+            <button
+              class="plain-button"
+              :disabled="w.blocked || w.library.page <= 1"
+              @click="w.loadLibrary(w.library.page - 1)"
+            >
+              上一页
+            </button><button
+              class="plain-button"
+              :disabled="w.blocked || w.library.page * 12 >= w.library.total"
+              @click="w.loadLibrary(w.library.page + 1)"
+            >
+              下一页
+            </button>
+          </div>
+        </aside>
+        <aside
+          v-else
+          class="history-rail"
+          aria-label="版本历史"
+        >
+          <h2>版本历史 <span class="muted">{{ w.historyTotal }}</span></h2><div class="history-list">
+            <div
+              v-for="item in w.history"
+              :key="item.id"
+              class="history-entry"
+              :class="{ selected: item.id === w.historical?.revision.id }"
+            >
               <button
-                v-if="review.expandedIds.length"
-                class="text-button"
-                :disabled="locked"
-                @click="session.collapseAll"
+                class="history-card"
+                :disabled="w.busy"
+                @click="w.selectHistory(item.id)"
               >
-                收起全部
+                <div class="history-time">
+                  {{ versionName(item) }} · {{ time(item.savedAt) }}
+                </div><p class="history-person">
+                  {{ item.username }} 保存
+                </p><p class="history-summary">
+                  {{ item.kind === 'upload' ? '上传原图' : item.kind === 'import' ? '导入记录' : `新增 ${item.added} · 修改 ${item.modified} · 删除 ${item.deleted}` }}
+                </p>
               </button>
             </div>
-            <div
-              ref="list"
-              class="marker-list"
-              tabindex="-1"
-              aria-label="临时标记列表"
+          </div><button
+            v-if="w.history.length < w.historyTotal"
+            class="btn history-more"
+            :disabled="w.busy"
+            @click="w.moreHistory"
+          >
+            加载更早记录
+          </button>
+        </aside>
+        <section
+          class="canvas-panel"
+          aria-label="图片画布"
+        >
+          <ImageStage
+            ref="imageStage"
+            :image="w.image.image"
+            :markers="w.stageMarkers"
+            :draft="null"
+            :selected-id="w.page === 'history' ? w.historySelected : w.draft.selectedId"
+            :disabled="w.locked"
+            :read-only="w.page === 'history'"
+            :temporary-labels="false"
+            @place="w.place"
+            @select="w.selectMarker"
+            @view="w.saveView"
+          />
+        </section>
+        <aside
+          v-if="w.page === 'review'"
+          class="inspector"
+          aria-label="标记与说明"
+        >
+          <div class="inspector-heading">
+            <h2>标记 {{ w.activeMarkers.length }}</h2><button
+              v-if="w.expandedIds.length"
+              class="plain-button tiny"
+              :disabled="w.blocked"
+              @click="w.expandedIds = []"
             >
-              <p
-                v-if="!review.markers.length"
-                class="muted"
-              >
-                还没有临时标记。在图片上点击位置，填写说明后添加。
-              </p>
-              <article
-                v-for="marker in review.markers"
-                :key="marker.id"
-                class="marker-row"
-                :class="{ 'is-selected': review.selectedId === marker.id }"
-                :data-marker-id="marker.id"
-              >
-                <button
-                  class="marker-summary"
-                  :disabled="locked"
-                  :aria-expanded="review.expandedIds.includes(marker.id)"
-                  :aria-controls="`note-${marker.id}`"
-                  @click="select(marker.id, true)"
-                >
-                  <span class="marker-label">临时 {{ marker.label }}</span>
-                  <span
-                    v-if="review.selectedId === marker.id"
-                    class="selected-label"
-                  >已选中</span>
-                  <span
-                    class="disclosure"
-                    aria-hidden="true"
-                  >{{ review.expandedIds.includes(marker.id) ? '−' : '+' }}</span>
-                </button>
-                <div
-                  v-show="review.expandedIds.includes(marker.id)"
-                  :id="`note-${marker.id}`"
-                  class="marker-details"
-                >
-                  <p class="marker-note">
-                    {{ marker.note }}
-                  </p>
-                  <p class="muted">
-                    位置 {{ (marker.x * 100).toFixed(1) }}% / {{ (marker.y * 100).toFixed(1) }}%
-                  </p>
-                  <div class="toolbar">
-                    <button
-                      class="secondary"
-                      :disabled="locked"
-                      @click="edit(marker.id)"
-                    >
-                      编辑说明
-                    </button>
-                    <button
-                      class="danger-secondary"
-                      :disabled="locked || review.selectedId !== marker.id"
-                      @click="session.requestDelete(marker.id)"
-                    >
-                      删除
-                    </button>
-                  </div>
-                </div>
-              </article>
-            </div>
+              收起全部
+            </button>
+          </div><p
+            v-if="w.copy.count()"
+            class="tiny"
+          >
+            {{ counts.add }} 项新增 · {{ counts.modify }} 项修改 · {{ counts.delete }} 项待删除
+          </p>
+          <div class="marker-list">
             <section
-              v-if="review.draft"
-              class="draft-panel"
-              aria-labelledby="draft-title"
+              v-for="row in w.activeMarkers"
+              :key="row.id"
+              class="marker-item"
+              :class="{ active: row.id === w.draft.selectedId, 'pending-delete': w.draft.removed.includes(row.id) }"
             >
-              <h3 id="draft-title">
-                {{ review.draft.id ? '编辑临时说明' : '新增临时标记' }}
-              </h3>
-              <p class="muted">
-                位置 {{ (review.draft.x * 100).toFixed(1) }}% / {{ (review.draft.y * 100).toFixed(1) }}% · 当前标签页临时缓存
-              </p>
-              <label for="draft-note">问题说明</label>
-              <textarea
-                id="draft-note"
-                ref="noteInput"
-                v-model="review.draft.note"
-                rows="5"
-                :disabled="locked"
-                :aria-invalid="noteStatus !== 'valid'"
-                aria-describedby="note-status"
-                placeholder="描述这里需要调整的问题…"
-              />
-              <p
-                id="note-status"
-                aria-live="polite"
-                :class="{ error: noteStatus !== 'valid' }"
+              <button
+                class="marker-summary"
+                :disabled="w.blocked"
+                :aria-expanded="w.expandedIds.includes(row.id)"
+                :aria-controls="`details-${row.id}`"
+                @click="w.toggle(row.id)"
               >
-                {{ noteStatus === 'empty' ? '说明不能为空。' : noteStatus === 'too-long' ? '说明最多 2000 字符。' : '说明有效，尚未保存。' }}（{{ review.draft.note.trim().length }} / 2000）
-              </p>
-              <div class="toolbar">
-                <button
-                  :disabled="locked || noteStatus !== 'valid'"
-                  @click="apply"
+                <span class="marker-num">#{{ row.label }}</span><span
+                  class="severity"
+                  :class="row.severity"
+                /><span class="grow truncate">{{ row.note || '请填写问题说明' }}</span><span
+                  v-if="w.copy.kind(row.id)"
+                  class="pill"
+                  :class="w.copy.kind(row.id) === 'delete' ? 'red' : w.copy.kind(row.id) === 'add' ? 'green' : 'amber'"
+                >{{ changeText(w.copy.kind(row.id)) }}</span><span
+                  v-else
+                  class="muted"
+                >{{ w.expandedIds.includes(row.id) ? '−' : '+' }}</span>
+              </button>
+              <div
+                v-show="w.expandedIds.includes(row.id)"
+                :id="`details-${row.id}`"
+                class="marker-description"
+              >
+                <label
+                  class="field-label"
+                  :for="`note-${row.id}`"
+                >问题说明</label><textarea
+                  :id="`note-${row.id}`"
+                  v-model="w.draft.markers.find(marker => marker.id === row.id)!.note"
+                  class="note-input"
+                  maxlength="2000"
+                  :disabled="w.blocked"
+                  placeholder="描述这个位置需要修改的问题…"
+                /><p class="tiny">
+                  {{ row.note.trim().length }} / 2000{{ !row.note.trim() ? ' · 保存前请填写说明' : '' }}
+                </p><div class="field-row">
+                  <label
+                    class="field-label"
+                    :for="`severity-${row.id}`"
+                  >严重程度</label><select
+                    :id="`severity-${row.id}`"
+                    v-model="w.draft.markers.find(marker => marker.id === row.id)!.severity"
+                    class="severity-select"
+                    :disabled="w.blocked"
+                  >
+                    <option value="low">
+                      低
+                    </option><option value="medium">
+                      中
+                    </option><option value="high">
+                      高
+                    </option>
+                  </select>
+                </div><div class="point-size-field">
+                  <label
+                    class="field-label"
+                    :for="`size-${row.id}`"
+                  >大小</label>
+                  <input
+                    :id="`size-${row.id}`"
+                    type="range"
+                    min="12"
+                    max="48"
+                    step="1"
+                    :value="row.size ?? 24"
+                    :disabled="w.blocked"
+                    :aria-label="`标记 ${row.label} 大小`"
+                    @input="setSize(w.draft.markers.find(marker => marker.id === row.id)!, $event)"
+                  >
+                  <input
+                    type="number"
+                    min="12"
+                    max="48"
+                    step="1"
+                    :value="row.size ?? 24"
+                    :disabled="w.blocked"
+                    :aria-label="`标记 ${row.label} 大小像素值`"
+                    @change="setSize(w.draft.markers.find(marker => marker.id === row.id)!, $event)"
+                  ><span>px</span>
+                </div><div
+                  v-if="w.copy.old(row.id)"
+                  class="marker-author"
                 >
-                  {{ review.draft.id ? '应用临时修改' : '添加临时标记' }}
-                </button>
-                <button
-                  class="secondary"
-                  :disabled="locked"
-                  @click="session.cancelDraft"
+                  创建：{{ w.copy.old(row.id)!.createdByName }} · {{ time(w.copy.old(row.id)!.createdAt) }}<br>最后保存：{{ w.copy.old(row.id)!.updatedByName }} · {{ time(w.copy.old(row.id)!.updatedAt) }}
+                </div><p
+                  v-else
+                  class="tiny"
                 >
-                  取消草稿
-                </button>
+                  本次新建 · 尚未保存
+                </p><div class="marker-actions">
+                  <button
+                    class="btn subtle"
+                    :disabled="w.blocked"
+                    @click="w.copy.undo(row.id)"
+                  >
+                    取消本条更改
+                  </button><button
+                    class="btn subtle danger"
+                    :disabled="w.blocked"
+                    @click="w.copy.remove(row.id)"
+                  >
+                    {{ w.copy.old(row.id) ? '删除' : '取消新点' }}
+                  </button>
+                </div>
+              </div>
+            </section>
+          </div>
+          <details
+            v-if="w.removedMarkers.length"
+            class="removed-markers"
+          >
+            <summary>待删除 {{ w.removedMarkers.length }}</summary>
+            <div
+              v-for="row in w.removedMarkers"
+              :key="row.id"
+              class="removed-row"
+            >
+              <span class="truncate">{{ row.note }}</span><button
+                class="btn subtle"
+                :disabled="w.blocked"
+                @click="w.copy.restoreRemoved(row.id)"
+              >
+                撤回删除
+              </button>
+            </div>
+          </details>
+        </aside>
+        <aside
+          v-else-if="w.historical"
+          class="inspector"
+          aria-label="历史标记"
+        >
+          <div class="inspector-heading">
+            <h2>标记 {{ w.historyMarkers.length }}</h2><span class="pill gray">只读</span>
+          </div>
+          <div class="marker-list">
+            <section
+              v-for="row in w.historyMarkers"
+              :key="row.id"
+              class="marker-item"
+              :class="{ active: row.id === w.historySelected }"
+            >
+              <button
+                class="marker-summary"
+                :disabled="w.locked"
+                :aria-expanded="w.historyExpandedIds.includes(row.id)"
+                :aria-controls="`history-details-${row.id}`"
+                @click="w.toggle(row.id)"
+              >
+                <span class="marker-num">#{{ row.label }}</span><span
+                  class="severity"
+                  :class="row.severity"
+                /><span class="grow truncate">{{ row.note }}</span><span aria-hidden="true">{{ w.historyExpandedIds.includes(row.id) ? '−' : '+' }}</span>
+              </button>
+              <div
+                v-show="w.historyExpandedIds.includes(row.id)"
+                :id="`history-details-${row.id}`"
+                class="marker-description"
+              >
+                <p class="wrap history-note">
+                  {{ row.note }}
+                </p><div class="field-row">
+                  <span>{{ severityText(row.severity) }}</span><span>{{ row.size }} px</span>
+                </div>
+                <p class="marker-author">
+                  {{ row.updatedByName }} · {{ time(row.updatedAt) }}
+                </p>
+              </div>
+            </section>
+          </div>
+          <details
+            class="changes-panel"
+            :open="w.showChanges"
+            @toggle="w.showChanges = ($event.target as HTMLDetailsElement).open"
+          >
+            <summary>本次变化 <span class="muted">{{ w.historical.changes.length }}</span></summary>
+            <section
+              v-for="change in w.historical.changes"
+              :key="change.annotationId"
+              class="diff-card"
+            >
+              <button
+                class="diff-card-header"
+                :disabled="w.locked"
+                @click="w.selectMarker(change.annotationId)"
+              >
+                <span
+                  class="pill"
+                  :class="change.kind === 'add' ? 'green' : change.kind === 'delete' ? 'red' : 'amber'"
+                >{{ change.kind === 'add' ? '＋ 新增' : change.kind === 'delete' ? '− 删除' : '~ 修改' }}</span>
+                <span>{{ change.kind === 'delete' ? '上一版 ' : '' }}#{{ w.changeLabel(change.annotationId, change.kind === 'delete') }}</span>
+              </button>
+              <div class="diff-content">
+                <div
+                  v-if="change.before"
+                  class="diff-before"
+                >
+                  上一版 #{{ w.changeLabel(change.annotationId, true) }}：{{ change.before.note }}<p class="tiny">
+                    {{ severityText(change.before.severity) }} · {{ change.before.size }}px
+                  </p>
+                </div>
+                <div
+                  v-if="change.after"
+                  class="diff-after"
+                >
+                  本版 #{{ w.changeLabel(change.annotationId) }}：{{ change.after.note }}<p class="tiny">
+                    {{ severityText(change.after.severity) }} · {{ change.after.size }}px
+                  </p>
+                </div>
               </div>
             </section>
             <p
-              v-if="review.hint"
-              role="status"
-              class="error"
+              v-if="!w.historical.changes.length"
+              class="small muted"
             >
-              {{ review.hint }}
+              暂无变化
             </p>
-          </aside>
-        </div>
-      </template>
-      <p
-        v-else-if="!imageState.loading"
-        class="empty-state"
-      >
-        尚未选择图片。选择后即可临时预览和打点。
-      </p>
-    </section>
-    <section
-      class="service-panel"
-      aria-labelledby="service-heading"
-    >
-      <h2 id="service-heading">
-        服务状态
-      </h2>
-      <p
-        role="status"
-        aria-live="polite"
-        :class="serviceState"
-      >
-        <span class="dot" />{{ serviceState === 'checking' ? '检查中' : serviceState === 'ready' ? '服务已就绪' : '服务不可用' }}
-      </p>
-      <p v-if="serviceState === 'unavailable'">
-        请确认后端正在运行，然后重试。
-      </p>
-      <p
-        v-if="requestId"
-        class="request-id"
-      >
-        请求编号：{{ requestId }}
-      </p>
+          </details>
+        </aside>
+      </main>
+    </template>
+  </template>
+  <dialog
+    ref="leaveDialog"
+    class="review-dialog"
+    aria-labelledby="leave-title"
+    @cancel.prevent="w.resolveLeave('stay')"
+  >
+    <h2 id="leave-title">
+      先处理本次修改
+    </h2><p>有 {{ w.copy.count() }} 项尚未保存。保存成功后继续，或放弃本次更改。</p><div class="row dialog-actions">
       <button
-        :disabled="serviceState === 'checking'"
-        @click="check"
+        class="btn primary"
+        :disabled="w.busy || w.draft.busy"
+        @click="w.resolveLeave('save')"
       >
-        {{ serviceState === 'checking' ? '正在检查…' : '重新检查' }}
+        {{ w.draft.pending ? '重试确认并继续' : '保存并继续' }}
+      </button><button
+        class="btn danger"
+        :disabled="w.blocked"
+        @click="w.resolveLeave('discard')"
+      >
+        放弃更改
+      </button><button
+        class="btn"
+        autofocus
+        :disabled="w.draft.busy"
+        @click="w.resolveLeave('stay')"
+      >
+        留在当前
       </button>
-      <p class="muted">
-        本地审阅不依赖服务状态。正式上传、保存与恢复将在后续阶段提供。
-      </p>
-    </section>
-    <dialog
-      ref="dialog"
-      class="review-dialog"
-      aria-labelledby="confirm-title"
-      @cancel.prevent="dismissDialog"
+    </div><p
+      v-if="w.errorText"
+      class="error"
+      role="alert"
     >
-      <template v-if="review.pending">
-        <h2 id="confirm-title">
-          先处理当前草稿
-        </h2>
-        <p>应用只会更新当前标签页的临时内容。请选择如何处理，再继续刚才的操作。</p>
-        <p
-          v-if="noteStatus !== 'valid'"
-          class="error"
-        >
-          当前说明无效，请放弃草稿，或留在当前修改说明。
-        </p>
-        <div class="toolbar">
-          <button
-            :disabled="noteStatus !== 'valid'"
-            @click="resolvePending('apply')"
-          >
-            应用后继续
-          </button>
-          <button
-            class="danger-secondary"
-            @click="resolvePending('discard')"
-          >
-            放弃草稿并继续
-          </button>
-          <button
-            class="secondary"
-            autofocus
-            @click="resolvePending('stay')"
-          >
-            留在当前
-          </button>
-        </div>
-      </template>
-      <template v-else-if="review.deleteId">
-        <h2 id="confirm-title">
-          删除临时标记？
-        </h2>
-        <p>该标记及正在编辑的说明将一并删除，无法撤销。其他标记会保留。</p>
-        <div class="toolbar">
-          <button
-            class="danger"
-            @click="resolveDelete(true)"
-          >
-            确认删除
-          </button>
-          <button
-            class="secondary"
-            autofocus
-            @click="resolveDelete(false)"
-          >
-            取消
-          </button>
-        </div>
-      </template>
-    </dialog>
-  </main>
+      {{ w.errorText }}
+    </p>
+  </dialog>
 </template>

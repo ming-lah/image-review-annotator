@@ -19,6 +19,33 @@ function snapshot(imageFile: File): SessionSnapshot {
 }
 
 describe('tab-scoped recovery cache', () => {
+  it('migrates a P3 entry only after a successful P4 snapshot write', async () => {
+    const model = setup(); const image = file();
+    await model.session.save(snapshot(image), image);
+    const raw = JSON.parse([...model.entries.values()][0]) as { version: number };
+    model.entries.clear(); raw.version = 1;
+    const legacyKey = 'image-review-annotator:p3:tab-session:v1'; model.entries.set(legacyKey, JSON.stringify(raw));
+    const upgraded = createTabSession(model.deps); const recovered = await upgraded.load();
+    model.storage.setItem.mockImplementationOnce(() => { throw new Error('quota'); });
+    await expect(upgraded.save(recovered!.snapshot, recovered!.file!)).rejects.toThrow('quota');
+    expect(model.entries.has(legacyKey)).toBe(true);
+    await upgraded.save(recovered!.snapshot, recovered!.file!);
+    expect(model.entries.has(legacyKey)).toBe(false); expect([...model.entries.keys()]).toEqual(['image-review-annotator:p4:tab-session:v2']);
+  });
+  it('caches only metadata for a formal image, retaining pending payloads and freeing the local blob after success', async () => {
+    const model = setup(); const image = file(); const value = snapshot(image);
+    await model.session.save(value, image);
+    const imageId = crypto.randomUUID(); const annotationId = crypto.randomUUID(); const actorId = crypto.randomUUID();
+    value.remote = { image: { id: imageId, originalName: image.name, mimeType: 'image/png', width: 800, height: 600, fileSize: image.size, sha256: 'a'.repeat(64), createdAt: 'now', updatedAt: 'now' }, uploadId: imageId, uploadUnknown: false,
+      pendingWrite: { kind: 'create', imageId, id: annotationId, value: { id: annotationId, x: 0.2, y: 0.3, note: '待确认', severity: 'high', actorId, actorName: '测试' } } };
+    await model.session.save(value, image);
+    const loaded = await createTabSession(model.deps).load();
+    expect(loaded?.file).toBeNull(); expect(loaded?.snapshot.remote?.pendingWrite).toEqual(value.remote.pendingWrite);
+    expect(model.blobs.size).toBe(0); expect(model.cache.write).toHaveBeenCalledTimes(1);
+    value.remote.pendingWrite!.imageId = crypto.randomUUID();
+    await expect(model.session.save(value, image)).rejects.toThrow();
+    expect((await model.session.load())?.snapshot.remote?.image?.id).toBe(imageId);
+  });
   it('rejects inconsistent restored identities and counters before writing any image or metadata', async () => {
     const model = setup();
     const image = file();
@@ -37,9 +64,9 @@ describe('tab-scoped recovery cache', () => {
     const recovered = await refreshed.load();
     expect(recovered?.snapshot.review).toEqual(value.review);
     expect(recovered?.snapshot.view).toEqual(value.view);
-    expect(await recovered?.file.text()).toBe('sample');
-    expect(recovered?.file.name).toBe(image.name);
-    expect(recovered?.file.type).toBe(image.type);
+    expect(await recovered?.file?.text()).toBe('sample');
+    expect(recovered?.file?.name).toBe(image.name);
+    expect(recovered?.file?.type).toBe(image.type);
     expect(JSON.stringify([...model.entries.values()])).not.toContain('data:image');
   });
   it('does not restore a closed tab from an independent empty sessionStorage even if image bytes remain cached', async () => {
@@ -70,7 +97,7 @@ describe('tab-scoped recovery cache', () => {
     await model.session.save(snapshot(newImage), newImage);
     finish();
     await oldSave;
-    expect((await createTabSession(model.deps).load())?.file.name).toBe('new.png');
+    expect((await createTabSession(model.deps).load())?.file?.name).toBe('new.png');
     expect(model.blobs.size).toBe(1);
   });
   it('reports quota failures, preserves the previous good snapshot and permits retry', async () => {
@@ -92,7 +119,7 @@ describe('tab-scoped recovery cache', () => {
     await expect(model.session.save(snapshot(image), image)).rejects.toThrow('Cache unavailable');
     expect(model.entries.size).toBe(0);
     await model.session.save(snapshot(image), image);
-    expect((await model.session.load())?.file.name).toBe('sample.png');
+    expect((await model.session.load())?.file?.name).toBe('sample.png');
   });
   it('rejects corrupt metadata and missing image cache without applying partial recovery', async () => {
     const model = setup();

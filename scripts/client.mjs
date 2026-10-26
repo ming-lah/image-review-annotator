@@ -22,6 +22,7 @@ if (!/^\d+$/.test(portText) || Number(portText) < 1 || Number(portText) > 65535)
     };
     process.on('SIGINT', stop);
     process.on('SIGTERM', stop);
+    process.on('disconnect', () => { void stop(); });
     process.on('message', message => { if (message === 'shutdown') void stop(); });
   } catch (error) {
     await server?.close();

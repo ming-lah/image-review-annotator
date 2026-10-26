@@ -4,5 +4,6 @@
     "strict": true, "noEmit": true, "esModuleInterop": true,
     "skipLibCheck": true, "lib": ["ES2023", "DOM"], "types": ["node", "vite/client"]
   },
-  "include": ["src/**/*.ts", "src/**/*.vue", "tests/**/*.ts", "*.config.ts"]
+  "include": ["src/**/*.ts", "src/**/*.vue", "tests/**/*.ts", "*.config.ts"],
+  "exclude": ["tests/.tmp", "dist", "node_modules"]
 }

@@ -74,7 +74,7 @@ describe('in-page review session', () => {
     model.request({ kind: 'edit', id });
     model.state.draft!.note = '  changed  ';
     model.applyDraft();
-    expect(model.state.markers[0]).toEqual({ id, label: 1, x: 0.2, y: 0.3, note: 'changed' });
+    expect(model.state.markers[0]).toEqual({ id, label: 1, x: 0.2, y: 0.3, note: 'changed', severity: 'medium' });
   });
   it('preserves invalid input, prevents repeated targets and executes the original action once', () => {
     const model = setup();
@@ -105,7 +105,8 @@ describe('in-page review session', () => {
     expect(model.state.draft?.x).toBe(0);
     model.request({ kind: 'place', point: { x: 1, y: 1 } });
     model.resolvePending('discard');
-    expect(model.state.draft).toEqual({ id: null, x: 1, y: 1, note: '' });
+    expect(model.state.draft).toMatchObject({ id: null, x: 1, y: 1, note: '', severity: 'medium' });
+    expect(model.state.draft?.requestId).toBeTruthy();
     expect(model.state.markers).toHaveLength(0);
   });
   it('allows switching unmodified edits, rejects invalid coordinates and freezes during loading', () => {

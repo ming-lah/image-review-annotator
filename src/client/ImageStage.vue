@@ -2,7 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { pointInImage, type Point } from './review';
 import type { EditorDraft, LocalMarker } from './review-session';
-import { fitScale, imageOffset, scrollToPoint, stagePadding, stepScale, viewportCenter, type ViewSnapshot } from './review-view';
+import { fitScale, imageOffset, scrollToPoint, stagePadding, viewportCenter, type ViewSnapshot } from './review-view';
 
 const props = defineProps<{
   image: { url: string; name: string; width: number; height: number };
@@ -10,6 +10,8 @@ const props = defineProps<{
   draft: EditorDraft | null;
   selectedId: string | null;
   disabled: boolean;
+  readOnly?: boolean;
+  temporaryLabels?: boolean;
 }>();
 const emit = defineEmits<{ place: [point: Point]; select: [id: string]; view: [snapshot: ViewSnapshot] }>();
 const stage = ref<HTMLDivElement>();
@@ -17,7 +19,7 @@ const imageElement = ref<HTMLImageElement>();
 const viewport = ref({ width: 1, height: 1 });
 const mode = ref<'fit' | 'manual'>('fit');
 const manualScale = ref(1);
-const markerSize = ref(24);
+const markerSize = (marker: LocalMarker) => marker.size ?? 24;
 const scale = computed(() => mode.value === 'fit' ? fitScale(props.image, viewport.value) : manualScale.value);
 const rendered = computed(() => ({ width: props.image.width * scale.value, height: props.image.height * scale.value }));
 const offset = computed(() => imageOffset(props.image, viewport.value, scale.value));
@@ -42,28 +44,27 @@ async function zoom(value: number | 'fit') {
   await reveal(anchor);
 }
 function place(event: MouseEvent) {
-  if (props.disabled || !imageElement.value) return;
+  if (props.disabled || props.readOnly || !imageElement.value) return;
   const point = pointInImage(event.clientX, event.clientY, imageElement.value.getBoundingClientRect());
   if (point) emit('place', point);
 }
 function placeCenter() {
-  if (!props.disabled) emit('place', { x: 0.5, y: 0.5 });
+  if (!props.disabled && !props.readOnly) emit('place', { x: 0.5, y: 0.5 });
 }
 function select(id: string) { if (!props.disabled) emit('select', id); }
 function emitView() {
-  if (!restoring) emit('view', { mode: mode.value, manualScale: manualScale.value, markerSize: markerSize.value, anchor: center() });
+  if (!restoring) emit('view', { mode: mode.value, manualScale: manualScale.value, markerSize: 24, anchor: center() });
 }
 async function restoreView(snapshot: ViewSnapshot) {
   restoring = true;
   if (stage.value) viewport.value = { width: stage.value.clientWidth, height: stage.value.clientHeight };
   mode.value = snapshot.mode;
   manualScale.value = snapshot.manualScale;
-  markerSize.value = snapshot.markerSize;
   await reveal(snapshot.anchor);
   restoring = false;
   emitView();
 }
-watch([mode, manualScale, markerSize], async () => { await nextTick(); emitView(); });
+watch([mode, manualScale], async () => { await nextTick(); emitView(); });
 
 watch(() => props.image.url, () => { mode.value = 'fit'; manualScale.value = 1; void reveal({ x: 0.5, y: 0.5 }); });
 onMounted(() => {
@@ -85,26 +86,21 @@ defineExpose({ reveal, restoreView });
       class="view-toolbar"
       aria-label="图片视图工具"
     >
-      <button
-        class="secondary"
-        :disabled="disabled || (mode === 'manual' && scale <= 0.1)"
-        aria-label="缩小图片"
-        @click="zoom(stepScale(scale, -1))"
-      >
-        −
-      </button>
-      <output
-        class="zoom-value"
-        aria-live="polite"
-      >{{ (scale * 100).toFixed(1) }}%{{ mode === 'fit' ? ' · 适应' : '' }}</output>
-      <button
-        class="secondary"
-        :disabled="disabled || scale >= 4"
-        aria-label="放大图片"
-        @click="zoom(stepScale(scale, 1))"
-      >
-        +
-      </button>
+      <label class="zoom-slider">
+        <span>缩放</span>
+        <input
+          type="range"
+          min="10"
+          max="400"
+          step="1"
+          :value="Math.min(400, Math.max(10, scale * 100))"
+          :disabled="disabled"
+          aria-label="图片缩放比例"
+          :aria-valuetext="`${(scale * 100).toFixed(1)}%${mode === 'fit' ? '，适应' : ''}`"
+          @input="zoom(Number(($event.target as HTMLInputElement).value) / 100)"
+        >
+      </label>
+      <output class="zoom-value">{{ (scale * 100).toFixed(1) }}%{{ mode === 'fit' ? ' · 适应' : '' }}</output>
       <button
         class="secondary"
         :disabled="disabled"
@@ -119,17 +115,6 @@ defineExpose({ reveal, restoreView });
       >
         适应视口
       </button>
-      <label class="marker-size">标记大小
-        <input
-          v-model.number="markerSize"
-          type="range"
-          min="12"
-          max="48"
-          step="2"
-          :disabled="disabled"
-        >
-        <output>{{ markerSize }} px</output>
-      </label>
     </div>
     <div
       ref="stage"
@@ -148,32 +133,33 @@ defineExpose({ reveal, restoreView });
           <img
             ref="imageElement"
             :src="image.url"
+            :class="{ 'read-only-image': readOnly }"
             :alt="image.name"
             :width="image.width"
             :height="image.height"
             draggable="false"
-            role="button"
-            :tabindex="disabled ? -1 : 0"
+            :role="readOnly ? 'img' : 'button'"
+            :tabindex="disabled || readOnly ? -1 : 0"
             :aria-disabled="disabled"
-            aria-label="点击图片新建标记；Enter 或空格在图片中心新建"
+            :aria-label="readOnly ? '历史版本图片' : '点击图片新建标记；Enter 或空格在图片中心新建'"
             @click="place"
             @keydown.enter.prevent="placeCenter"
             @keydown.space.prevent="placeCenter"
           >
           <svg
             class="marker-overlay"
-            aria-label="临时标记"
+            aria-label="图片标记"
           >
             <g
               v-for="marker in markers"
               :key="marker.id"
               class="marker"
-              :class="{ selected: selectedId === marker.id }"
+              :class="{ selected: selectedId === marker.id, temporary: !marker.saved, 'history-add': marker.change === 'add', 'history-modify': marker.change === 'modify', 'history-delete': marker.change === 'delete', inherited: marker.change === 'inherited' }"
               :transform="`translate(${marker.x * rendered.width}, ${marker.y * rendered.height})`"
               role="button"
               :tabindex="disabled ? -1 : 0"
               :aria-disabled="disabled"
-              :aria-label="`选择临时标记 ${marker.label}`"
+              :aria-label="marker.change === 'delete' ? `上一版标记 ${marker.label}，已删除` : `选择标记 ${marker.label}`"
               :aria-pressed="selectedId === marker.id"
               @click.stop="select(marker.id)"
               @keydown.enter.stop.prevent="select(marker.id)"
@@ -181,17 +167,17 @@ defineExpose({ reveal, restoreView });
             >
               <circle
                 class="marker-hit"
-                :r="Math.max(12, markerSize / 2)"
+                :r="Math.max(12, markerSize(marker) / 2)"
               />
               <circle
                 class="marker-dot"
-                :r="markerSize / 2"
+                :r="markerSize(marker) / 2"
               />
               <text
                 dy=".35em"
                 text-anchor="middle"
-                :style="{ fontSize: `${Math.max(9, markerSize * 0.45)}px` }"
-              >{{ marker.label }}</text>
+                :style="{ fontSize: `${Math.max(9, markerSize(marker) * 0.45)}px` }"
+              >{{ marker.change === 'delete' ? '−' : marker.label }}</text>
             </g>
             <g
               v-if="draft"
@@ -201,20 +187,17 @@ defineExpose({ reveal, restoreView });
             >
               <circle
                 class="marker-dot"
-                :r="markerSize / 2"
+                :r="12"
               />
               <text
                 dy=".35em"
                 text-anchor="middle"
-                :style="{ fontSize: `${Math.max(9, markerSize * 0.6)}px` }"
+                :style="{ fontSize: '14px' }"
               >✎</text>
             </g>
           </svg>
         </div>
       </div>
     </div>
-    <p class="muted">
-      点击图片新建；点击已有点选择。可滚动查看大图，键盘 Enter / 空格在原图中心新建。标记位置与大小独立。
-    </p>
   </div>
 </template>

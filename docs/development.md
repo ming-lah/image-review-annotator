@@ -1,7 +1,9 @@
 # 开发与 Git 流程
 
-状态：spec1 / P0–P1、spec2 / P2 已由用户确认完成；spec3 / P3 自动检查通过、待用户手动验收；后续阶段规划
+状态：本轮UI已获用户手测确认；M1–M6专项和A1默认端口自动项未完成，旧阶段记录保留
 日期：2026-10-26
+
+当前入口为username表单→共享图库→工作台→完整版本查看。004补充逐点size和固定版本号，兼容旧历史与旧请求回执；继承只保留为内部存储实现，页面不展示。正式入口为client/state/use-workbench.ts、working-copy.ts、server/persistence/workbench-repository.ts。当前未完成项在tests/manual/current.md，后续按tests/manual/regression.md回归；自动化实际136通过、1项默认端口受阻，不作为全量通过。DATA_DIR继续隔离；旧实例/PID只属于上一轮现场证据，本轮未复核运行版本。下文旧阶段内容为背景。
 
 ## 开发前：先写轻量 spec
 
@@ -9,7 +11,7 @@
 
 - docs/design.md：长期设计基线。
 - docs/v1-plan.md：产品与技术细化草案、整体路线图，新增规则需对齐。
-- workspace/specs/active/：单个待对齐、正在实施或待验收的开发变更；已确认完成的 P0–P1、P2 归入 completed/，P3 当前待验收。
+- workspace/specs/active/：单个待对齐、正在实施或待验收的开发变更；已验收且自动门禁完成的放completed/；被当前方案替代的P3/P4等放archive/，未完成门禁继续active/。
 - 根 README 与 docs/README.md：入口与分类；workspace/README.md：本地推进索引。
 - AGENTS.md：目录与协作约束；tests/：唯一测试入口、测试代码、配置和手动集合。
 
@@ -61,6 +63,12 @@ spec 只写：
 
 ## 开发中
 
+当前代码职责：App.vue 组合界面；client/components/ 放标记侧栏与服务状态，client/http/ 负责 HTTP 和 DTO 校验，client/state/ 负责工作台衔接、身份与保存/冲突状态，原有 review/session/view/preview/tab-session 模块保留各自纯逻辑和缓存职责。server/http/ 负责路由、上传中间件及输入/错误适配，server/persistence/ 负责 SQLite 仓库、图片校验与受控文件操作；storage.ts 负责启动迁移和目录就绪。shared/ 只放前后端 schema/DTO。避免使用受运行时 data/ 忽略规则影响的源码目录名。
+
+build 前由 scripts/clean-build.mjs 仅清理受控 dist/，再构建与复制正式迁移，防止移动模块后残留旧编译文件。开发和测试临时产物统一在 tests/.tmp/，不清理已有用户手动验证数据；本轮新增测试和命令会自动回收自身资源。
+
+Vite 根目录为 src/client/，/api 前缀保留给后端代理；客户端请求源码使用 client/http/，不能放在会映射为 /api/*.ts 的目录。开发检查须包含本地 JS 模块依赖的实际 HTTP 加载，不能只检查首页、ready 或生产构建。dev supervisor、API 和 Vite 子进程在 IPC 父通道断开时回收自身资源；不扫描并终止全局 Node 进程。
+
 1. 按当前 spec 实现最小改动。
 2. 记录实现入口、数据变化、失败原因和已知限制。
 3. 先运行针对性测试，再运行阶段级检查。
@@ -77,7 +85,7 @@ spec 只写：
 2. P1：Vue、Express、SQLite、health/ready、开发和生产启动。
 3. P2：单图片、点击标记、说明输入的前端闭环。
 4. P3：归一化坐标、缩放、滚动、多标记、编辑和删除。
-5. P4：图片文件存储、SQLite 元数据、保存和重启恢复。
+5. P4（已实现、待页面验收）：单图上传、文件/SQLite、逐条保存、昵称/严重程度、事务编号、版本保护、重复请求保护和重启恢复。
 6. P5：多图片列表、上传、切换和删除。
 7. P6：先本机验证并发，再做可信局域网；WAL、编号事务和 version 保护的前移建议见 V1 方案草案，在涉及的阶段 spec 对齐后执行。
 8. P7：测试、日志、失败复现、文档和交付。

@@ -1,53 +1,17 @@
 # Image Review Annotator
 
-“审图打点”是本地优先的图片审阅 Web 工作台。P0–P2 已由用户确认完成；P3 已实现单图多标记、独立展开收起、编辑删除、缩放滚动、列表定位和标记大小调节，待用户页面验收。内容仅保留在浏览器当前标签页会话中，同标签页刷新可恢复；普通关闭后新开不恢复，尚未上传或正式保存。
-
-产品定位：本地优先、可在可信局域网共享的图片审阅 Web 工作台。
-
-## 当前决策
-
-- 前端：Vue 3 + TypeScript + Vite
-- 后端：Node.js + TypeScript + Express
-- 数据库：本地 SQLite，作为唯一数据库
-- 图片文件：由应用管理的本地数据目录，SQLite 保存图片元数据和相对路径
-- 访问方式：本机访问，配置后支持可信局域网访问
-- 操作人：V1 使用浏览器生成的操作人 ID 和昵称，不做密码账号
-- 并发：SQLite WAL、短事务、服务端编号分配、标记版本乐观锁
-- 实时协作：V1 不做 WebSocket，V2 规划加入基础实时更新
-- 公网部署、HTTPS、真实账号和复杂权限：不属于 V1
-
-## 文档导航
-
-- [文档索引](docs/README.md)：文档分类、状态与阅读顺序
-- [设计基线](docs/design.md)：需求、架构、数据、存储、并发和 V2 边界
-- [V1 产品与技术方案](docs/v1-plan.md)：待对齐的交互规则、技术细化、接口草案和路线图
-- [开发与 Git 流程](docs/development.md)：spec、阶段推进、测试验收和 Git 约束
-- [提交说明](docs/submission.md)
-- [测试入口与覆盖范围](tests/README.md)、[P3 验收计划](tests/manual/p3.md)、[P2 回归](tests/manual/p2.md)、[P0–P1 回归](tests/manual/p0-p1.md)
-- [协作约束](AGENTS.md)
-
-本地开发记录写在被 Git 忽略的 `workspace/` 目录：
-
-```text
-workspace/
-  README.md
-  specs/active/
-  specs/completed/
-  specs/archive/
-```
-
-`workspace/` 只用于本地推进，不上传 GitHub。
+本地优先的图片审阅Web工作台：昵称进入 → 图片库 → 审阅 → 整图保存 → 查看完整版本。支持多图列表、搜索/排序/分页、单文件上传、逐点大小、连续显示序号、版本历史及服务重启恢复。2026-10-26用户已确认本轮UI手测通过；尚未专项确认的环境/异常场景见[当前待验证](tests/manual/current.md)。昵称不是认证，内容共享可见；不提供实时协作、权限或图片删除。
 
 ## 安装与运行
 
-需要 Node.js 24.x 和 npm。依赖已精确锁定；SQLite 使用 better-sqlite3，Windows Node 24 已验证安装与真实读写。
+使用 Node.js 24.x 和 npm，依赖版本由 package-lock.json 精确锁定。
 
 ```bash
 npm ci
 npm run dev
 ```
 
-开发页面：[http://127.0.0.1:5174](http://127.0.0.1:5174)，后端默认 127.0.0.1:3002；Vite 代理 `/api`。任一进程启动失败时共同退出，Ctrl+C 关闭两端。修改后端代码后需重启开发命令。
+开发页面为 [127.0.0.1:5174](http://127.0.0.1:5174)，后端为 127.0.0.1:3002，Vite 代理 /api。任一端启动失败会共同退出；Ctrl+C 停止本次实例。修改后端源码后重启开发命令。
 
 生产模式：
 
@@ -56,58 +20,58 @@ npm run build
 npm run start
 ```
 
-生产只运行 Node，在 [http://127.0.0.1:3002](http://127.0.0.1:3002) 同源提供页面与 API，不需要 Vite。缺少构建时返回 BUILD_MISSING 并非零退出。
+构建先清理本项目受控 dist/，避免旧编译文件残留；生产只需 Node，在 [127.0.0.1:3002](http://127.0.0.1:3002) 同源提供页面、API 与图片。
 
-配置（环境变量）：
-
-| 变量 | 默认值与约束 |
+| 环境变量 | 默认值与边界 |
 |---|---|
-| HOST | 127.0.0.1；可显式设为 0.0.0.0，局域网实机验收留待后续阶段 |
-| PORT | 3002；1–65535 整数；开发代理跟随该值 |
-| VITE_PORT | 5174；仅开发前端使用，端口冲突时失败，不自动换端口 |
-| DATA_DIR | 绝对路径；未设置时使用系统应用数据目录 |
+| HOST | 127.0.0.1；显式设 0.0.0.0 才监听其他网卡，局域网验收留待 P6 |
+| PORT | 3002；开发代理跟随，不静默换端口 |
+| VITE_PORT | 5174；只影响开发前端，不静默换端口 |
+| DATA_DIR | 绝对路径；不设置时使用系统应用数据目录 |
 
-Windows 默认数据目录为 `%LOCALAPPDATA%/ImageReviewAnnotator`，macOS 为 `~/Library/Application Support/ImageReviewAnnotator`，Linux 为 `$XDG_DATA_HOME/ImageReviewAnnotator`（未设置时 `~/.local/share/ImageReviewAnnotator`）。不回退到临时库。数据库仅有迁移表，暂无业务表。
+默认 DATA_DIR：Windows 为 `%LOCALAPPDATA%/ImageReviewAnnotator`，macOS 为 `~/Library/Application Support/ImageReviewAnnotator`，Linux 为 `$XDG_DATA_HOME/ImageReviewAnnotator`，后者未设置时使用 `~/.local/share/ImageReviewAnnotator`。SQLite 与图片文件保存在同一目录树中。错误和日志不输出完整本机路径，技术控制台使用英文 ASCII。
 
-默认端口固定为后端 3002、开发前端 5174，避开此前的端口冲突。旧终端可能仍保留 PORT=3102 等配置，使用新默认值前先清除旧覆盖；不需要修改全局终端设置：
+人工验收请使用隔离数据，完整准备与清理见 [当前手动集合](tests/manual/current.md)：
 
 ```powershell
-Remove-Item Env:PORT,Env:VITE_PORT -ErrorAction SilentlyContinue
-$env:DATA_DIR = Join-Path (Get-Location) 'tests/.tmp/manual-p0-p1'
+$env:HOST = '127.0.0.1'
+$env:PORT = '3002'
+$env:VITE_PORT = '5174'
+$env:DATA_DIR = Join-Path (Get-Location) 'tests/.tmp/manual-workbench/data'
 npm run dev
 ```
 
-此时前端为 5174，后端为 3002；生产 `npm run start` 默认同样为 3002。仍支持 PORT/VITE_PORT 显式覆盖，但不自动换端口。环境变量仅对当前终端及子进程生效。
+未进入时只显示username表单；图库上传成功即保存原图并创建初始记录。工作台的新增/修改/待删除在顶部一次手动保存，每次有效保存形成V1/V2等完整可查看版本，按时间与操作人显示；全部历史保留，原图不按版本复制。同标签页尝试恢复未保存工作副本，缓存失败不影响后端成功；普通新开不承诺恢复草稿。切换username会回入口，不复用不同username的操作人ID。
 
-技术控制台日志采用英文 ASCII 消息，避免 Windows PowerShell 将 UTF-8 中文按其他代码页解释而显示乱码；页面与 API 中文不变。端口冲突日志包含实际端口与处理提示。如果 start 显示旧日志或旧端口，请先重新 build。
+演示数据已提供：首次运行 `npm run demo:prepare`，随后按 [演示启动与手动步骤](tests/manual/basic-demo.md) 设置专用 DATA_DIR，打开固定图片链接。包含16个合成/错误样本和5条已保存标记；现有包不会被覆盖，需放弃包内改动时先停止自己的演示实例再显式 `npm run demo:reset`。
 
-## 验证命令
+## 验证
 
 ```bash
 npm run lint
 npm run typecheck
 npm test
 npm run build
+npm run repro:invalid-annotation
+npm run test:production
 ```
 
-测试代码、配置、覆盖范围和手动集合统一放在 [tests/](tests/README.md)。自动测试数据在 `tests/.tmp/`，测试结束自动清理。不使用浏览器自动化验证；P3 页面交互与视觉验收由用户按 [P3 手动集合](tests/manual/p3.md)执行。默认端口自动用例需要 3002/5174 空闲，当前占用导致该项受阻；其余回归结果见测试入口。
+最后两项使用隔离测试数据并自动清理，生产 HTTP 检查需要先 build。自动结果和覆盖边界见 [tests/README.md](tests/README.md)；页面、焦点和视觉由用户按手动集合验收，不使用浏览器自动化。默认端口回归要求 3002/5174 空闲，不能终止其他应用替测试腾端口。
 
-`GET /api/health` 返回 `{"status":"ok"}`；`GET /api/ready` 真实检查 SQLite 查询和目录写入/清理。错误为 `{error:{code,message,requestId}}`，带对应 X-Request-Id，未知 API 返回 JSON 404。请求日志隐藏查询参数及未知路径内容。
+## 文档与目录
 
-## 当前状态
-
-2026-10-25：spec1、spec2 / P2 已由用户确认完成；P3 已获授权并实现，spec3 留在 active 等待用户手动验收。lint/typecheck/build 通过；最终 npm test 为 68 通过、1 因固定端口占用失败，不能记为全量通过。整体计划见 docs/v1-plan.md，详细证据见 [测试入口](tests/README.md)。尚不支持上传、服务端正式保存、跨标签页/服务重启恢复、昵称或协作；`repro:invalid-annotation` 留到业务接口阶段实现。Windows 为实机验证范围，macOS/Linux 仅覆盖路径逻辑。未 commit/push。
-
-## 目录职责
+- [文档索引](docs/README.md)、[设计基线](docs/design.md)、[V1 方案与路线图](docs/v1-plan.md)
+- [开发流程与代码职责](docs/development.md)、[交付及实际验证记录](docs/submission.md)、[协作约束](AGENTS.md)
+- [测试入口](tests/README.md)、[当前未完成验收](tests/manual/current.md)、[后续手动回归](tests/manual/regression.md)、[样本说明](tests/manual/basic-demo.md)
 
 ```text
-src/client/     页面与样式
-src/server/     API、配置、存储、日志
-src/shared/     共享 schema 与类型
-migrations/    正式 SQL 迁移
-scripts/       正式开发、构建、启动脚本
-tests/         测试代码、配置、手动集合、隔离临时数据
-docs/          设计、方案、流程、交付摘要
-workspace/     本地 spec 与推进记录（Git 忽略）
-dist/          构建产物（Git 忽略）
+src/client/    Vue 页面、components/、http/、state/ 与图片视图逻辑
+src/server/    app/server、http/、persistence/、配置与日志
+src/shared/    共享 schema、DTO 与类型，不依赖 Node
+migrations/    正式 SQL 迁移；历史迁移不改写
+scripts/       正式开发、构建与启动脚本
+tests/         单元/API/SQLite/进程测试、手动步骤与隔离临时数据
+docs/          产品、设计、流程与交付资料
+workspace/     本地 spec 与推进索引，Git 忽略
+dist/          构建产物，Git 忽略
 ```

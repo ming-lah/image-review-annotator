@@ -1,0 +1,26 @@
+import { z } from 'zod';
+import { annotationSchema, imageSchema, severitySchema, uuidSchema, markerSizeSchema } from './review-contracts.js';
+
+export const userSchema = z.strictObject({ userId: uuidSchema, username: z.string().trim().min(1).max(40) });
+export const enterSchema = z.strictObject({ username: z.string().trim().min(1).max(40), userId: uuidSchema.optional() });
+export const workingMarkerSchema = z.strictObject({ id: uuidSchema, x: z.number().min(0).max(1), y: z.number().min(0).max(1), note: z.string().trim().min(1).max(2000), severity: severitySchema, size: markerSizeSchema.optional() });
+export const saveReviewSchema = z.strictObject({ requestId: uuidSchema, baseRevisionId: uuidSchema, userId: uuidSchema, markers: z.array(workingMarkerSchema).max(500) }).refine(value => new Set(value.markers.map(marker => marker.id)).size === value.markers.length);
+export const revisionSchema = z.strictObject({ id: uuidSchema, imageId: uuidSchema, parentRevisionId: uuidSchema.nullable(), userId: uuidSchema, username: z.string(), savedAt: z.string(), kind: z.enum(['upload', 'import', 'save', 'legacy']), added: z.number().int(), modified: z.number().int(), deleted: z.number().int(), versionNumber: z.number().int().nonnegative().default(0) });
+export const changeSchema = z.strictObject({ annotationId: uuidSchema, kind: z.enum(['add', 'modify', 'delete']), before: annotationSchema.nullable(), after: annotationSchema.nullable(), userId: uuidSchema });
+export const workspaceDetailSchema = z.strictObject({ image: imageSchema, annotations: z.array(annotationSchema), revision: revisionSchema });
+export const historyDetailSchema = workspaceDetailSchema.extend({ changes: z.array(changeSchema), previousAnnotations: z.array(annotationSchema).optional() });
+export const libraryItemSchema = z.strictObject({ image: imageSchema, annotationCount: z.number().int(), revisionCount: z.number().int(), username: z.string(), uploadedByUserId: uuidSchema });
+export const librarySchema = z.strictObject({ items: z.array(libraryItemSchema), total: z.number().int(), page: z.number().int(), pageSize: z.number().int() });
+export const revisionListSchema = z.strictObject({ items: z.array(revisionSchema), total: z.number().int(), page: z.number().int(), pageSize: z.number().int() });
+export const saveResultSchema = z.strictObject({ savedRevisionId: uuidSchema, created: z.boolean(), detail: workspaceDetailSchema, libraryItem: libraryItemSchema.optional() });
+export type User = z.infer<typeof userSchema>;
+export type WorkingMarker = z.infer<typeof workingMarkerSchema>;
+export type SaveReview = z.infer<typeof saveReviewSchema>;
+export type Revision = z.infer<typeof revisionSchema>;
+export type Change = z.infer<typeof changeSchema>;
+export type WorkspaceDetail = z.infer<typeof workspaceDetailSchema>;
+export type HistoryDetail = z.infer<typeof historyDetailSchema>;
+export type LibraryItem = z.infer<typeof libraryItemSchema>;
+export type Library = z.infer<typeof librarySchema>;
+export type RevisionList = z.infer<typeof revisionListSchema>;
+export type SaveResult = z.infer<typeof saveResultSchema>;

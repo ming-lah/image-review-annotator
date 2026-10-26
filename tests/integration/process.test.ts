@@ -6,6 +6,18 @@ import { launch, tempDir, freePort, waitFor } from '../support/helpers.js';
 
 const entry = ['--import', 'tsx', 'src/server/server.ts'];
 describe('startup and shutdown', () => {
+  it('closes its database and listener when the launching runner disconnects IPC', async () => {
+    const port = await freePort();
+    const proc = launch(entry, { DATA_DIR: tempDir(), PORT: String(port), HOST: '127.0.0.1', NODE_ENV: 'development' });
+    try {
+      await waitFor(`http://127.0.0.1:${port}/api/ready`, proc.output);
+      proc.child.disconnect();
+      expect(await proc.exited).toBe(0);
+      expect(proc.output()).toContain('"event":"stopped"');
+      const probe = net.createServer(); await new Promise<void>((resolve, reject) => { probe.once('error', reject); probe.listen(port, '127.0.0.1', resolve); });
+      await new Promise<void>(resolve => probe.close(() => resolve()));
+    } finally { await proc.stop(); }
+  });
   it.each([
     [{ PORT: 'wrong' }, 'INVALID_PORT'],
     [{ DATA_DIR: 'relative' }, 'INVALID_DATA_DIR'],
