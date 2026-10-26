@@ -97,6 +97,8 @@ describe('username, library and inherited manual saves', () => {
       expect(edited.detail.revision).toMatchObject({ versionNumber: 2, modified: 1, added: 0 });
       const historical = (await request(app).get(`/api/workbench/images/${imageId}/history/${firstId}`).expect(200)).body;
       expect(historical.annotations[0]).toMatchObject({ number: 7, size: 24, note: 'old' });
+      await request(app).delete(`/api/images/${imageId}`).send({ userId, baseRevisionId: edited.savedRevisionId }).expect(204);
+      expect(upgraded.db.prepare('SELECT * FROM review_save_receipts').all()).toEqual([]);
       expect(upgraded.db.pragma('foreign_key_check')).toEqual([]);
     } finally { upgraded.close(); }
   });

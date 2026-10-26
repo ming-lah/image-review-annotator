@@ -8,6 +8,8 @@ import entryArt from './assets/entry.svg';
 const w = useWorkbench();
 const imageStage = ref<InstanceType<typeof ImageStage>>();
 const leaveDialog = ref<HTMLDialogElement>(); const fileInput = ref<HTMLInputElement>();
+const deleteDialog = ref<HTMLDialogElement>();
+const uploadStatus = (value: string) => ({ waiting: '等待上传', uploading: '正在上传', success: '上传成功', failed: '上传失败', unknown: '结果未知，已暂停', abandoned: '已放弃等待' })[value] ?? value;
 watchEffect(() => { w.stage = imageStage.value; });
 const avatar = computed(() => Array.from(w.user?.username ?? '')[0] ?? '');
 const severityText = (value: string) => ({ low: '低', medium: '中', high: '高' })[value] ?? value;
@@ -21,7 +23,7 @@ function setSize(row: WorkingMarker, event: Event) {
   input.value = String(row.size);
 }
 function openLink(event: MouseEvent, id: string) { if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return; event.preventDefault(); void w.openImage(id); }
-function chooseFile(event: Event) { const input = event.target as HTMLInputElement; const file = input.files?.[0]; input.value = ''; if (file) void w.upload(file); }
+function chooseFile(event: Event) { const input = event.target as HTMLInputElement; const files = Array.from(input.files ?? []); input.value = ''; if (files.length) void w.uploadFiles(files); }
 let previousFocus: HTMLElement | null = null;
 watch(() => [w.draft.selectedId, w.focusRevision, w.dialog], async () => {
   if (w.page !== 'review' || w.dialog || !w.draft.selectedId) return;
@@ -38,6 +40,11 @@ watch(() => w.dialog, async value => {
   if (value) previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   await nextTick();
   if (value) leaveDialog.value?.showModal(); else { leaveDialog.value?.close(); if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true }); }
+});
+watch(() => w.deleteDialog, async value => {
+  if (value) previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  await nextTick();
+  if (value) deleteDialog.value?.showModal(); else { deleteDialog.value?.close(); if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true }); }
 });
 </script>
 
@@ -141,7 +148,7 @@ watch(() => w.dialog, async value => {
       {{ w.draft.busy ? '正在保存本次修改…' : '正在读取…' }}
     </div>
     <div
-      v-if="w.errorText || w.draft.pending || w.uploadPending"
+      v-if="w.errorText || w.draft.pending || w.deletePending"
       class="feedback error-feedback"
       role="alert"
     >
@@ -158,19 +165,13 @@ watch(() => w.dialog, async value => {
       >
         用原请求确认保存结果
       </button>
-      <template v-else-if="w.uploadPending">
+      <template v-else-if="w.deletePending">
         <button
           class="btn"
           :disabled="w.busy"
-          @click="w.upload()"
+          @click="w.verifyDelete"
         >
-          用原文件重试上传
-        </button><button
-          class="btn subtle"
-          :disabled="w.busy"
-          @click="w.abandonUpload"
-        >
-          放弃等待
+          核实删除结果
         </button>
       </template>
       <button
@@ -258,10 +259,77 @@ watch(() => w.dialog, async value => {
             type="file"
             class="visually-hidden"
             accept="image/png,image/jpeg,image/webp"
+            multiple
             :disabled="w.blocked"
             @change="chooseFile"
           >
         </div>
+        <section
+          v-if="w.uploads.items.length || w.uploads.error"
+          class="upload-results"
+          aria-label="上传结果"
+          :aria-busy="w.uploads.running"
+        >
+          <h2>上传图片 <span class="muted">{{ w.uploads.items.filter(item => ['success', 'failed', 'abandoned'].includes(item.status)).length }} / {{ w.uploads.items.length }}</span></h2>
+          <p
+            v-if="w.uploads.error"
+            class="error"
+            role="alert"
+          >
+            {{ w.uploads.error }}
+          </p>
+          <p class="small muted">
+            一次最多 10 张，逐张上传；刷新或关闭页面后不继续上传。
+          </p>
+          <ul>
+            <li
+              v-for="item in w.uploads.items"
+              :key="item.id"
+            >
+              <span class="upload-name wrap">{{ item.file.name }}</span>
+              <span
+                class="upload-state"
+                :class="{ error: item.status === 'failed' || item.status === 'unknown' }"
+                role="status"
+              >{{ uploadStatus(item.status) }}</span>
+              <p
+                v-if="item.message && item.status !== 'success'"
+                class="wrap small"
+              >
+                {{ item.message }}
+              </p>
+              <details v-if="item.requestId">
+                <summary>请求编号</summary><code>{{ item.requestId }}</code>
+              </details>
+              <div class="row upload-actions">
+                <button
+                  v-if="item.status === 'success' && item.image"
+                  class="btn"
+                  :disabled="w.blocked"
+                  @click="w.openImage(item.image!.id)"
+                >
+                  打开图片
+                </button>
+                <button
+                  v-if="item.status === 'failed' || item.status === 'unknown'"
+                  class="btn"
+                  :disabled="w.uploads.running || w.busy || w.uploads.items.some(row => row.status === 'unknown' && row.id !== item.id)"
+                  @click="w.retryUpload(item.id)"
+                >
+                  {{ item.status === 'unknown' ? '用原文件确认结果' : '重试本项' }}
+                </button>
+                <button
+                  v-if="item.status === 'unknown'"
+                  class="btn subtle"
+                  :disabled="w.uploads.running || w.busy"
+                  @click="w.abandonUpload(item.id)"
+                >
+                  放弃等待并继续
+                </button>
+              </div>
+            </li>
+          </ul>
+        </section>
         <div class="tools">
           <form
             class="row search-form"
@@ -383,6 +451,13 @@ watch(() => w.dialog, async value => {
         </div>
         <div class="review-actions">
           <template v-if="w.page === 'review'">
+            <button
+              class="btn subtle danger"
+              :disabled="w.blocked"
+              @click="w.askDelete"
+            >
+              删除图片
+            </button>
             <span
               v-if="w.copy.count()"
               class="pill amber"
@@ -774,6 +849,61 @@ watch(() => w.dialog, async value => {
       </main>
     </template>
   </template>
+  <dialog
+    ref="deleteDialog"
+    class="review-dialog"
+    aria-labelledby="delete-title"
+    @cancel.prevent="w.cancelDelete"
+  >
+    <h2 id="delete-title">
+      删除整张图片？
+    </h2>
+    <p class="wrap">
+      {{ w.currentImage?.originalName }}
+    </p>
+    <p>原图、全部标记和所有保存版本都会删除，无法撤销。</p>
+    <p v-if="w.copy.count()">
+      本图还有 {{ w.copy.count() }} 项未保存修改；确认后本地草稿也会丢弃。
+    </p>
+    <p v-if="w.deletePending">
+      删除请求已发出。若连接中断，请核实结果或用原请求重试；尚未确认前保留当前输入。
+    </p>
+    <p
+      v-if="w.errorText"
+      class="error"
+      role="alert"
+    >
+      {{ w.errorText }}
+    </p>
+    <details v-if="w.errorRequestId">
+      <summary>请求编号</summary><code>{{ w.errorRequestId }}</code>
+    </details>
+    <div class="row dialog-actions">
+      <button
+        class="btn"
+        autofocus
+        :disabled="w.busy || !!w.deletePending"
+        @click="w.cancelDelete"
+      >
+        取消
+      </button>
+      <button
+        v-if="w.deletePending"
+        class="btn"
+        :disabled="w.busy"
+        @click="w.verifyDelete"
+      >
+        核实删除结果
+      </button>
+      <button
+        class="btn danger"
+        :disabled="w.busy"
+        @click="w.deleteImage"
+      >
+        {{ w.busy ? '正在处理…' : w.deletePending ? '用原请求重试删除' : '确认删除整图' }}
+      </button>
+    </div>
+  </dialog>
   <dialog
     ref="leaveDialog"
     class="review-dialog"

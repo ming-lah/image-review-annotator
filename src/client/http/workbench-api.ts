@@ -1,5 +1,5 @@
 import { jsonRequests, reviewApi } from './review-api';
-import { userSchema, librarySchema, workspaceDetailSchema, historyDetailSchema, revisionListSchema, saveResultSchema, type SaveReview } from '../../shared/workbench-contracts';
+import { userSchema, librarySchema, workspaceDetailSchema, historyDetailSchema, revisionListSchema, saveResultSchema, type SaveReview, type DeleteImage } from '../../shared/workbench-contracts';
 
 export function workbenchApi(fetcher: typeof fetch = fetch) {
   const send = jsonRequests(fetcher); const images = reviewApi(fetcher);
@@ -12,6 +12,7 @@ export function workbenchApi(fetcher: typeof fetch = fetch) {
     historical: (id: string, revisionId: string) => send(`/api/workbench/images/${id}/history/${revisionId}`, {}, historyDetailSchema),
     save: (id: string, value: SaveReview) => send(`/api/workbench/images/${id}/saves`, json(value), saveResultSchema),
     upload: images.upload, content: images.content,
+    removeImage: (id: string, value: DeleteImage) => send<void>(`/api/images/${id}`, { ...json(value), method: 'DELETE' }),
   };
 }
 export type WorkbenchApi = ReturnType<typeof workbenchApi>;

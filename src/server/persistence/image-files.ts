@@ -87,6 +87,14 @@ export function imageFiles(dataDir: string) {
       try { fs.unlinkSync(contentPath(key)); }
       catch { logger.warn({ event: 'image_rollback_cleanup_failed', imageId: key.split('/')[0], requestId, errorCode: 'STORAGE_UNAVAILABLE' }); }
     },
+    removeImage(key: string, requestId?: string) {
+      try {
+        const file = contentPath(key);
+        try { fs.unlinkSync(file); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+        // rmdir removes only an empty, checked image directory; never recurse.
+        try { fs.rmdirSync(checked(path.dirname(file))); } catch (error) { if (!['ENOENT', 'ENOTEMPTY'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error; }
+      } catch { logger.warn({ event: 'image_delete_cleanup_failed', imageId: key.split('/')[0], requestId, errorCode: 'STORAGE_UNAVAILABLE' }); }
+    },
   };
 }
 export type ImageFiles = ReturnType<typeof imageFiles>;

@@ -9,8 +9,8 @@
 | [开发流程](development.md) | spec审批、代码职责、Git和验证约束 |
 | [交付说明](submission.md) | 当前交付、用户确认、自动证据及未验证限制 |
 | [测试入口](../tests/README.md) | 自动覆盖、最新结果和手动集合导航 |
-| [当前待验证](../tests/manual/current.md) | 唯一未完成手动清单M1–M6，以及自动遗留A1 |
-| [后续回归](../tests/manual/regression.md) | 按改动触发的G1–G15，非现在全部重测 |
+| [当前待验证](../tests/manual/current.md) | 唯一未完成手动清单M1–M7，以及自动遗留A1 |
+| [后续回归](../tests/manual/regression.md) | 按改动触发的G1–G20；P5新增G16–G20本轮待测，其余按范围选择 |
 | [样本说明](../tests/manual/basic-demo.md) | 演示数据、格式边界和重置/隔离规则 |
 | [静态原型](prototypes/review-workbench/README.md) | 历史设计参考；不再独立验收、不作当前产品预期 |
 

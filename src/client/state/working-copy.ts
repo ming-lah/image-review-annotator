@@ -22,6 +22,7 @@ export function createWorkingCopy() {
   function bind(detail: WorkspaceDetail) {
     state.savedItem = null; state.base = detail; state.markers = detail.annotations.map(({ id, x, y, note, severity, size }) => ({ id, x, y, note, severity, size: size ?? 24 })); state.removed = []; state.selectedId = null; state.pending = null; state.error = ''; state.requestId = '';
   }
+  function clear() { state.base = null; state.markers = []; state.removed = []; state.selectedId = null; state.pending = null; state.savedItem = null; state.error = ''; state.requestId = ''; state.message = ''; }
   function place(point: { x: number; y: number }) {
     if (blocked() || !state.base || ![point.x, point.y].every(value => Number.isFinite(value) && value >= 0 && value <= 1)) return;
     if (state.markers.length >= 500) { state.error = '每张图本轮最多编辑 500 条标记'; return; }
@@ -67,5 +68,5 @@ export function createWorkingCopy() {
       return false;
     } finally { state.busy = false; }
   }
-  return { state, old, kind, count, blocked, bind, place, remove, undo, restoreRemoved, snapshot, restore, save };
+  return { state, old, kind, count, blocked, bind, clear, place, remove, undo, restoreRemoved, snapshot, restore, save };
 }

@@ -11,12 +11,15 @@ import { workbenchRepository } from '../persistence/workbench-repository.js';
 import { legacyUserId, usersRepository } from '../persistence/users.js';
 import { validateImage } from '../persistence/image-files.js';
 import { ApiFailure, parseInput } from './errors.js';
+import { imageManagement } from '../persistence/image-management.js';
+import { deleteImageSchema } from '../../shared/workbench-contracts.js';
 import { createAnnotationSchema, deleteAnnotationSchema, updateAnnotationSchema, uuidSchema } from '../../shared/review-contracts.js';
 
 export function reviewRoutes(storage: Storage) {
   const router = Router();
   const history = workbenchRepository(storage.db);
   const repository = reviewRepository(storage.db, (imageId, actor) => history.capture(imageId, actor));
+  const management = imageManagement(storage.db);
   const options: multer.Options & { streamHandler(req: Request, busboy: Writable): void } = {
     storage: multer.diskStorage({
       destination: (_req, _file, done) => { try { storage.files.check(); done(null, storage.files.uploads); } catch (error) { done(error as Error, ''); } },
@@ -47,9 +50,11 @@ export function reviewRoutes(storage: Storage) {
       if (Object.keys(req.body as object).some(key => key !== 'id')) throw new ApiFailure(400, 'INVALID_REQUEST', '上传字段无效');
       const id = parseInput(uuidSchema, (req.body as { id?: unknown }).id);
       res.locals.imageId = id;
+      management.requireLiveId(id);
       const originalName = [...path.win32.basename(path.posix.basename(file.originalname))].filter(char => char.charCodeAt(0) >= 32 && char.charCodeAt(0) !== 127).join('').slice(0, 255);
       const validated = await validateImage(storage.files.tempPath(file.filename), originalName, file.mimetype);
       storage.checkReady();
+      management.requireLiveId(id);
       const previous = repository.image(id);
       if (previous) {
         if (previous.sha256 !== validated.sha256 || previous.originalName !== originalName) throw new ApiFailure(409, 'IMAGE_ID_CONFLICT', '该上传请求编号已用于不同图片');
@@ -64,7 +69,7 @@ export function reviewRoutes(storage: Storage) {
       const image = { id, originalName, mimeType: validated.mimeType, width: validated.width, height: validated.height, fileSize: validated.fileSize, sha256: validated.sha256, createdAt: now, updatedAt: now };
       const userId = req.header('x-user-id') ? parseInput(uuidSchema, req.header('x-user-id')) : legacyUserId;
       usersRepository(storage.db).requireUser(userId);
-      storage.db.transaction(() => { repository.insertImage(image, installed!); history.initialize(id, userId); })();
+      storage.db.transaction(() => { management.requireLiveId(id); repository.insertImage(image, installed!); history.initialize(id, userId); }).immediate();
       installed = undefined;
       res.status(201).json(image);
     } finally {
@@ -76,6 +81,16 @@ export function reviewRoutes(storage: Storage) {
     const id = parseInput(uuidSchema, req.params.id);
     res.locals.imageId = id;
     res.json(repository.detail(id));
+  });
+  router.delete('/images/:id', (req, res) => {
+    storage.checkReady();
+    const id = parseInput(uuidSchema, req.params.id); const value = parseInput(deleteImageSchema, req.body);
+    Object.assign(res.locals, { imageId: id, actorId: value.userId });
+    // Validate the file boundary before committing a logical deletion, even if the original is missing.
+    storage.files.contentPath(repository.storageKey(id));
+    const key = management.remove(id, value);
+    storage.files.removeImage(key, res.locals.requestId as string);
+    res.sendStatus(204);
   });
   router.get('/images/:id/content', (req, res, next) => {
     const id = parseInput(uuidSchema, req.params.id);

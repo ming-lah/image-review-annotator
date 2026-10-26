@@ -36,4 +36,5 @@ html{scrollbar-gutter:stable}.progress-line{position:fixed;inset:0 0 auto;z-inde
 .image-surface img.read-only-image{cursor:default}
 
 .review-header{flex-wrap:wrap}.review-title{flex:1;min-width:min(100%,280px)}
+.upload-results{border:1px solid var(--line);border-radius:9px;padding:16px;margin:0 0 20px;min-width:0;background:var(--paper)}.upload-results h2{font-size:14px;margin-bottom:8px}.upload-results ul{list-style:none;padding:0;margin:12px 0 0;max-height:300px;overflow:auto}.upload-results li{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 0;border-top:1px solid var(--line);min-width:0}.upload-name{flex:1;min-width:min(100%,150px);font-size:12px}.upload-state{font-size:12px}.upload-results li>p,.upload-results details{flex-basis:100%;font-size:11px;overflow-wrap:anywhere}.upload-actions{flex-wrap:wrap;gap:8px}.upload-actions .btn{padding:5px 9px;font-size:11px}.upload-results code,.review-dialog code{overflow-wrap:anywhere}
 @media(min-width:761px) and (max-width:1040px){.history-layout .inspector{display:block}}

@@ -5,11 +5,13 @@ import { RequestFailure } from '../http/review-api';
 import { createWorkingCopy } from './working-copy';
 import { labelMarkers } from '../../shared/marker-labels';
 import { createToast } from './toast';
+import { createUploadQueue } from './upload-queue';
 import { createLocalPreview, type PreviewDependencies } from '../local-preview';
 import type { WorkbenchApi } from '../http/workbench-api';
 import { userSchema, type User, type Library, type HistoryDetail, type Revision, type LibraryItem } from '../../shared/workbench-contracts';
 import type { LocalMarker } from '../review-session';
-import { previewFileError, type Point } from '../review';
+import { type Point } from '../review';
+import type { DeleteImage } from '../../shared/workbench-contracts';
 import type { ViewSnapshot } from '../review-view';
 
 const activeKey = 'image-review:username:active'; const rememberedKey = 'image-review:username:remembered';
@@ -25,12 +27,17 @@ export function useWorkbench(deps: { api?: WorkbenchApi; preview?: Partial<Previ
   const historySelected = ref<string | null>(null); const dialog = ref(false); const showChanges = ref(false); const historyExpandedIds = ref<string[]>([]);
   const expandedIds = ref<string[]>([]);
   const focusRevision = ref(0);
-  const uploadPending = shallowRef<{ id: string; file: File } | null>(null);
+  const deleteDialog = ref(false); const deletePending = shallowRef<{ id: string; value: DeleteImage } | null>(null);
+  const queue = createUploadQueue(api.upload, async () => {
+    await loadLibrary(library.value.page, true, '上传结果请见各项状态');
+    const rows = queue.state.items;
+    if (rows.length === 1 && rows[0].status === 'success' && rows[0].image) await loadImage(rows[0].image.id);
+  });
   const stage = shallowRef<{ reveal(point: Point): Promise<void>; restoreView(view: ViewSnapshot): Promise<void> }>();
   const preview = createLocalPreview(deps.preview); const image = preview.state;
   let disposed = false; let listGeneration = 0; let pendingNavigation: (() => Promise<void>) | null = null;
-  const locked = computed(() => busy.value || copy.blocked() || image.loading);
-  const blocked = computed(() => locked.value || !!uploadPending.value);
+  const locked = computed(() => busy.value || copy.blocked() || image.loading || queue.active() || !!deletePending.value || deleteDialog.value);
+  const blocked = locked;
   const selected = computed(() => draft.markers.find(row => row.id === draft.selectedId) ?? null);
   const currentImage = computed(() => draft.base?.image ?? null);
   const errorText = computed(() => error.value || draft.error || image.error);
@@ -61,17 +68,22 @@ export function useWorkbench(deps: { api?: WorkbenchApi; preview?: Partial<Previ
   });
   function report(value: unknown) { error.value = value instanceof Error ? value.message : '操作失败，请重试'; requestId.value = value instanceof RequestFailure ? value.requestId : ''; }
   function read(kind: 'local' | 'session', key: string) { try { return (kind === 'local' ? window.localStorage : window.sessionStorage).getItem(key); } catch { cacheWarning.value = '浏览器缓存不可用，请注意保存并保留图片链接'; return null; } }
-  function write(kind: 'local' | 'session', key: string, value: string | null) { try { const storage = kind === 'local' ? window.localStorage : window.sessionStorage; if (value === null) storage.removeItem(key); else storage.setItem(key, value); } catch { cacheWarning.value = '浏览器缓存写入失败，当前输入仍在页面，正式保存结果不受影响'; } }
+  function write(kind: 'local' | 'session', key: string, value: string | null, failureMessage = '浏览器缓存写入失败，当前输入仍在页面，正式保存结果不受影响') { try { const storage = kind === 'local' ? window.localStorage : window.sessionStorage; if (value === null) storage.removeItem(key); else storage.setItem(key, value); } catch { cacheWarning.value = failureMessage; } }
   function url(imageId?: string, revisionId?: string) {
     const value = new URL(location.href); value.search = ''; if (imageId) value.searchParams.set('imageId', imageId); if (revisionId) value.searchParams.set('revisionId', revisionId);
     window.history.replaceState(null, '', value);
   }
   watch(() => copy.snapshot(), value => { const id = draft.base?.image.id; if (id) write('session', 'image-review:draft:' + id, value); }, { flush: 'post' });
-  async function loadLibrary(targetPage = 1, afterSave = false) {
+  async function loadLibrary(targetPage = 1, afterSave = false, completedMessage = '已保存') {
     const generation = ++listGeneration; libraryBusy.value = true; libraryWarning.value = '';
     if (!afterSave) { error.value = ''; requestId.value = ''; }
-    try { const value = await api.library(query.value, targetPage, sort.value); if (!disposed && generation === listGeneration) library.value = value; }
-    catch (value) { if (generation === listGeneration && !disposed) { if (afterSave) libraryWarning.value = '已保存，列表更新失败，可重试'; else report(value); } }
+    try {
+      let value = await api.library(query.value, targetPage, sort.value);
+      const lastPage = Math.max(1, Math.ceil(value.total / value.pageSize));
+      if (targetPage > lastPage && generation === listGeneration && !disposed) value = await api.library(query.value, lastPage, sort.value);
+      if (!disposed && generation === listGeneration) library.value = value;
+    }
+    catch (value) { if (generation === listGeneration && !disposed) { if (afterSave) libraryWarning.value = completedMessage + '，列表更新失败，可重试'; else report(value); } }
     finally { if (generation === listGeneration) libraryBusy.value = false; }
   }
   async function loadImage(id: string) {
@@ -118,9 +130,9 @@ export function useWorkbench(deps: { api?: WorkbenchApi; preview?: Partial<Previ
     if (copy.count()) { pendingNavigation = action; dialog.value = true; } else await action();
   }
   async function toLibrary() { await navigate(async () => { page.value = 'library'; url(); await loadLibrary(); }); }
-  async function openImage(id: string) { if (id === currentImage.value?.id && page.value !== 'library') { page.value = 'review'; return; } await navigate(async () => { await loadImage(id); }); }
+  async function openImage(id: string) { if (blocked.value) return; if (id === currentImage.value?.id && page.value !== 'library') { page.value = 'review'; return; } await navigate(async () => { await loadImage(id); }); }
   async function save() {
-    if (!user.value || busy.value) return false;
+    if (!user.value || busy.value || queue.active() || deletePending.value || deleteDialog.value) return false;
     if (!copy.count() && !draft.pending) return true;
     error.value = ''; requestId.value = '';
     const previousRevision = draft.base?.revision.id;
@@ -147,18 +159,54 @@ export function useWorkbench(deps: { api?: WorkbenchApi; preview?: Partial<Previ
     if (draft.base) copy.bind(draft.base);
     const action = pendingNavigation; pendingNavigation = null; dialog.value = false; if (action) await action();
   }
-  async function switchUser() { await navigate(async () => { write('session', activeKey, null); user.value = null; page.value = 'entry'; username.value = ''; url(); }); }
-  async function upload(file?: File) {
-    if (!user.value || locked.value) return;
-    if (!uploadPending.value) { if (!file) return; const invalid = previewFileError(file); if (invalid) { error.value = invalid; return; } uploadPending.value = { id: crypto.randomUUID(), file }; }
-    busy.value = true; error.value = ''; requestId.value = '';
-    try {
-      const pending = uploadPending.value; const saved = await api.upload(pending.id, pending.file, user.value.userId);
-      uploadPending.value = null; await loadLibrary(); await loadImage(saved.id);
-    } catch (value) { report(value); if (value instanceof RequestFailure && value.status !== null) uploadPending.value = null; }
-    finally { busy.value = false; }
+  async function switchUser() { await navigate(async () => { queue.clear(); write('session', activeKey, null); user.value = null; page.value = 'entry'; username.value = ''; url(); }); }
+  async function uploadFiles(files: File[]) {
+    if (!user.value || blocked.value || page.value !== 'library') return;
+    error.value = ''; requestId.value = ''; await queue.start(files, user.value.userId);
   }
-  function abandonUpload() { if (!busy.value && window.confirm('上传结果尚未确认，服务器可能已有图片。放弃等待并返回图片库？')) uploadPending.value = null; }
+  async function retryUpload(id: string) { if (!busy.value && !copy.blocked() && !deletePending.value && !deleteDialog.value && user.value?.userId === queue.state.userId) await queue.retry(id); }
+  async function abandonUpload(id: string) { if (window.confirm('上传结果尚未确认，服务器可能已有图片。放弃等待并继续后续文件？')) await queue.abandon(id); }
+  function askDelete() { if (page.value === 'review' && currentImage.value && !blocked.value) { error.value = ''; requestId.value = ''; deleteDialog.value = true; } }
+  function cancelDelete() { if (!busy.value && !deletePending.value) deleteDialog.value = false; }
+  async function finishDelete(id: string) {
+    const warning = '图片已删除，但本机缓存清理失败；旧链接不会恢复服务器数据';
+    write('session', 'image-review:draft:' + id, null, warning); write('session', 'image-review:view:' + id, null, warning);
+    copy.clear(); preview.clear(); historical.value = null; history.value = []; historyTotal.value = 0; historySelected.value = null;
+    expandedIds.value = []; historyExpandedIds.value = []; deletePending.value = null; deleteDialog.value = false;
+    // Remove the stale local card before a potentially failing list read; do not affect another image.
+    if (library.value.items.some(row => row.image.id === id)) library.value.total = Math.max(0, library.value.total - 1);
+    library.value.items = library.value.items.filter(row => row.image.id !== id);
+    queue.clear(); page.value = 'library'; url(); error.value = ''; requestId.value = '';
+    toast.show('图片已删除或已不存在'); await loadLibrary(library.value.page, true, '图片已删除');
+  }
+  async function deleteImage() {
+    if (!user.value || busy.value || copy.blocked() || queue.active() || !draft.base || (!deleteDialog.value && !deletePending.value)) return;
+    if (!deletePending.value) deletePending.value = { id: draft.base.image.id, value: { userId: user.value.userId, baseRevisionId: draft.base.revision.id } };
+    const pending = deletePending.value;
+    busy.value = true; error.value = ''; requestId.value = '';
+    try { await api.removeImage(pending.id, pending.value); if (!disposed) await finishDelete(pending.id); }
+    catch (value) {
+      if (!disposed) {
+        if (value instanceof RequestFailure && value.status === 404 && value.code === 'IMAGE_NOT_FOUND') await finishDelete(pending.id);
+        else { report(value); if (value instanceof RequestFailure && value.status !== null) { deletePending.value = null; deleteDialog.value = false; } }
+      }
+    } finally { busy.value = false; }
+  }
+  async function verifyDelete() {
+    if (!deletePending.value || busy.value) return;
+    const pending = deletePending.value; busy.value = true;
+    try {
+      const latest = await api.detail(pending.id);
+      if (disposed) return;
+      deletePending.value = null; deleteDialog.value = false;
+      error.value = latest.revision.id === pending.value.baseRevisionId ? '图片仍存在，本次输入已保留。可再次确认删除。' : '图片已被更新，本次输入已保留，请重新加载核对后再决定删除';
+    } catch (value) {
+      if (!disposed) {
+        if (value instanceof RequestFailure && value.status === 404 && value.code === 'IMAGE_NOT_FOUND') await finishDelete(pending.id);
+        else report(value);
+      }
+    } finally { busy.value = false; }
+  }
   async function reload() { await navigate(async () => { if (currentImage.value) await loadImage(currentImage.value.id); }); }
   async function historyList(more = false) {
     if (!currentImage.value) return;
@@ -193,7 +241,7 @@ export function useWorkbench(deps: { api?: WorkbenchApi; preview?: Partial<Previ
   }
   function place(point: Point) { if (page.value === 'review' && !blocked.value) { copy.place(point); if (draft.selectedId && !expandedIds.value.includes(draft.selectedId)) expandedIds.value.push(draft.selectedId); } }
   function saveView(view: ViewSnapshot) { if (currentImage.value && page.value === 'review') write('session', 'image-review:view:' + currentImage.value.id, JSON.stringify(view)); }
-  function beforeUnload(event: BeforeUnloadEvent) { if (copy.count() || draft.pending || uploadPending.value) { event.preventDefault(); event.returnValue = ''; } }
+  function beforeUnload(event: BeforeUnloadEvent) { if (copy.count() || draft.pending || queue.active() || deletePending.value) { event.preventDefault(); event.returnValue = ''; } }
   async function copyLink() { try { await navigator.clipboard.writeText(location.href); toast.show('图片链接已复制'); } catch { error.value = '复制失败，请从地址栏复制当前图片链接'; } }
   onMounted(async () => {
     window.addEventListener('beforeunload', beforeUnload);
@@ -202,6 +250,6 @@ export function useWorkbench(deps: { api?: WorkbenchApi; preview?: Partial<Previ
       const active = read('session', activeKey); if (active) { const current = userSchema.parse(JSON.parse(active)); username.value = current.username; await enter(); }
     } catch { cacheWarning.value = '上次进入状态无法恢复，请重新输入 username'; }
   });
-  onUnmounted(() => { disposed = true; listGeneration++; toast.dismiss(); preview.dispose(); window.removeEventListener('beforeunload', beforeUnload); });
-  return reactive({ page, user, username, busy, libraryBusy, libraryWarning, notice: toast.state, dismissToast: toast.dismiss, errorText, errorRequestId, cacheWarning, query, sort, layout, library, history, historyTotal, historical, historySelected, dialog, showChanges, historyExpandedIds, historyMarkers, changeLabel, activeMarkers, removedMarkers, expandedIds, focusRevision, uploadPending, stage, image, copy, draft, locked, blocked, selected, currentImage, rail, stageMarkers, enter, loadLibrary, toLibrary, openImage, save, resolveLeave, switchUser, upload, abandonUpload, reload, openHistory, selectHistory, moreHistory, backToReview, selectMarker, toggle, place, saveView, copyLink });
+  onUnmounted(() => { disposed = true; listGeneration++; queue.dispose(); toast.dismiss(); preview.dispose(); window.removeEventListener('beforeunload', beforeUnload); });
+  return reactive({ page, user, username, busy, libraryBusy, libraryWarning, notice: toast.state, dismissToast: toast.dismiss, errorText, errorRequestId, cacheWarning, query, sort, layout, library, history, historyTotal, historical, historySelected, dialog, showChanges, historyExpandedIds, historyMarkers, changeLabel, activeMarkers, removedMarkers, expandedIds, focusRevision, uploads: queue.state, deleteDialog, deletePending, askDelete, cancelDelete, deleteImage, verifyDelete, retryUpload, stage, image, copy, draft, locked, blocked, selected, currentImage, rail, stageMarkers, enter, loadLibrary, toLibrary, openImage, save, resolveLeave, switchUser, uploadFiles, abandonUpload, reload, openHistory, selectHistory, moreHistory, backToReview, selectMarker, toggle, place, saveView, copyLink });
 }

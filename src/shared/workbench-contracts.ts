@@ -3,6 +3,8 @@ import { annotationSchema, imageSchema, severitySchema, uuidSchema, markerSizeSc
 
 export const userSchema = z.strictObject({ userId: uuidSchema, username: z.string().trim().min(1).max(40) });
 export const enterSchema = z.strictObject({ username: z.string().trim().min(1).max(40), userId: uuidSchema.optional() });
+export const deleteImageSchema = z.strictObject({ userId: uuidSchema, baseRevisionId: uuidSchema });
+export type DeleteImage = z.infer<typeof deleteImageSchema>;
 export const workingMarkerSchema = z.strictObject({ id: uuidSchema, x: z.number().min(0).max(1), y: z.number().min(0).max(1), note: z.string().trim().min(1).max(2000), severity: severitySchema, size: markerSizeSchema.optional() });
 export const saveReviewSchema = z.strictObject({ requestId: uuidSchema, baseRevisionId: uuidSchema, userId: uuidSchema, markers: z.array(workingMarkerSchema).max(500) }).refine(value => new Set(value.markers.map(marker => marker.id)).size === value.markers.length);
 export const revisionSchema = z.strictObject({ id: uuidSchema, imageId: uuidSchema, parentRevisionId: uuidSchema.nullable(), userId: uuidSchema, username: z.string(), savedAt: z.string(), kind: z.enum(['upload', 'import', 'save', 'legacy']), added: z.number().int(), modified: z.number().int(), deleted: z.number().int(), versionNumber: z.number().int().nonnegative().default(0) });

@@ -64,7 +64,7 @@ export function workbenchRepository(db: Database.Database) {
   }
   function detail(imageId: string): WorkspaceDetail { return { ...repository.detail(imageId), revision: revision(head(imageId), imageId) }; }
   function library(query: string, page: number, sort: string): Library {
-    const order = sort === 'name' ? 'i.original_name COLLATE NOCASE ASC' : sort === 'created' ? 'i.created_at DESC,i.id' : 'i.updated_at DESC,i.id';
+    const order = sort === 'name' ? 'i.original_name COLLATE NOCASE ASC,i.id' : sort === 'created' ? 'i.created_at DESC,i.id' : 'i.updated_at DESC,i.id';
     const escaped = query.replace(/[\\%_]/g, value => '\\' + value); const pattern = `%${escaped}%`;
     const total = (db.prepare("SELECT count(*) AS total FROM images WHERE original_name LIKE ? ESCAPE '\\'").get(pattern) as { total: number }).total;
     const ids = db.prepare(`SELECT i.id FROM images i WHERE i.original_name LIKE ? ESCAPE '\\' ORDER BY ${order} LIMIT 12 OFFSET ?`).all(pattern, (page - 1) * 12) as { id: string }[];

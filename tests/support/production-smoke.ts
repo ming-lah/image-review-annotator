@@ -23,6 +23,13 @@ try {
     const historical = historyDetailSchema.parse(await (await fetch(`${base}/api/workbench/images/${image.id}/history/${first.savedRevisionId}`)).json()); assert.equal(historical.annotations[0].note, 'first'); assert.equal(restored.annotations[0].note, 'changed'); assert.equal(restored.annotations[1].note, 'retained'); assert.equal(restored.annotations[0].size, 31); assert.equal(restored.annotations[1].size, 48); assert.equal(historical.annotations[0].size, 12); assert.equal(restored.revision.versionNumber, 2);
     const library = librarySchema.parse(await (await fetch(base + '/api/workbench/images')).json()); assert.equal(library.total, 1); assert.equal(library.items[0].revisionCount, 3);
     const content = await fetch(`${base}/api/images/${image.id}/content`); assert.equal(content.status, 200); assert.deepEqual(Buffer.from(await content.arrayBuffer()), bytes);
+    const otherForm = new FormData(); const otherId = crypto.randomUUID(); otherForm.set('id', otherId); otherForm.set('file', new File([new Uint8Array(bytes)], 'other.png', { type: 'image/png' }));
+    assert.equal((await fetch(base + '/api/images', { method: 'POST', headers: { 'X-User-Id': user.userId }, body: otherForm })).status, 201);
+    const remove = await fetch(`${base}/api/images/${image.id}`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: user.userId, baseRevisionId: restored.revision.id }) }); assert.equal(remove.status, 204);
+    await restart();
+    assert.equal((await fetch(`${base}/api/workbench/images/${image.id}`)).status, 404); assert.equal((await fetch(`${base}/api/images/${image.id}/content`)).status, 404);
+    const late = await fetch(base + '/api/images', { method: 'POST', headers: { 'X-User-Id': user.userId }, body: form }); assert.equal(late.status, 409); assert.equal((await late.json() as { error: { code: string } }).error.code, 'IMAGE_DELETED');
+    const remaining = librarySchema.parse(await (await fetch(base + '/api/workbench/images')).json()); assert.equal(remaining.total, 1); assert.equal(remaining.items[0].image.id, otherId);
   }, true);
-  process.stdout.write('PASS production HTTP page/assets/username/library/batch-save/marker-sizes/versions/retry/image/restart; resources cleaned\n');
+  process.stdout.write('PASS production HTTP page/assets/username/library/batch-save/marker-sizes/versions/retry/image/delete/tombstone/restart; resources cleaned\n');
 } catch { process.stderr.write('FAIL production HTTP smoke; run build first and inspect tests\n'); process.exitCode = 1; }
