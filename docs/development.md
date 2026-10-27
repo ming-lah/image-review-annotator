@@ -50,7 +50,7 @@
 
 ## Git
 
-仓库的 GitHub Actions CI 在推送 main 和针对 main 的 pull request 上运行 Windows / Node 24 检查：npm ci、lint、typecheck、全量测试、build、非法标记复现、生产 HTTP 检查。生产检查使用前一步构建；默认端口断言保留，端口冲突必须报告。CI 不使用浏览器自动化、密钥或发布权限，不替代手动验收。
+仓库的 GitHub Actions CI 在推送 main 和针对 main 的 pull request 上运行 Windows / Node 24 检查：先准备 Python 3.13 供原生依赖构建，再执行 npm ci、lint、typecheck、全量测试、build、非法标记复现、生产 HTTP 检查。生产检查使用前一步构建；默认端口断言保留，端口冲突必须报告。CI 不使用浏览器自动化、密钥或发布权限，不替代手动验收。
 
 工作流首次推送后需查看实际运行结果。是否要求 PR 和将该检查设为 main 的必需状态检查，需要另行审核并配置仓库规则；单有工作流不会阻止直接推送。若未来启用 merge queue，需增加 merge_group 触发。
 
