@@ -93,6 +93,41 @@ function setup() {
   return { w: controller, api: managementApi, session, local, stopUpdates, notify: () => updates?.event({ type: 'image.changed', imageId: image.id, revisionId: crypto.randomUUID() }), reconnect: () => updates?.ready(), unmount: () => app.unmount() };
 }
 describe('entry and workbench composition flow', () => {
+  it('CT reports upload successes briefly while preserving failures for retry and single-image navigation', async () => {
+    const { w, api } = setup(); w.username = user.username; await w.enter();
+    const file = (name: string) => new File(['png'], name, { type: 'image/png' });
+    api.upload.mockRejectedValueOnce(new RequestFailure('invalid', 400, 'IMAGE_INVALID'));
+    await w.uploadFiles([file('bad.png'), file('ok.png')]);
+    expect(w.page).toBe('library'); expect(w.notice.message).toBe('已上传1张图片');
+    expect(w.uploadSummary.failed).toBe(1); expect(w.uploadSummary.issues).toHaveLength(1);
+    await w.retryUpload(w.uploadSummary.issues[0].id);
+    expect(w.notice.message).toBe('已上传2张图片'); expect(w.uploadSummary.issues).toEqual([]);
+    await w.uploadFiles([file('single.png')]);
+    expect(w.page).toBe('review'); expect(w.notice.message).toBe('已上传1张图片');
+  });
+  it.each([false, true])('BV restores an unknown single-marker request before suggesting merge (remote advanced: %s)', async advanced => {
+    const { w, api, session } = setup(); const start = { ...baseline, annotations: [existing] };
+    api.detail.mockResolvedValue(structuredClone(start)); w.username = user.username; await w.enter(); await w.openImage(image.id);
+    w.draft.markers[0].note = 'pending target'; w.place({ x: 0.8, y: 0.8 });
+    const emptyId = w.draft.selectedId!;
+    api.save.mockRejectedValueOnce(new RequestFailure('lost'));
+    expect(await w.saveMarker(existing.id)).toBe(false); await nextTick();
+    const pending = JSON.parse(JSON.stringify(api.save.mock.calls[0][1])); const raw = session.get('image-review:draft:' + image.id)!;
+    // Simulate the existing tab opening its cached working copy against the current server state.
+    w.copy.bind(start); await nextTick(); session.set('image-review:draft:' + image.id, raw);
+    const latest = advanced ? { ...start, revision: { ...start.revision, id: crypto.randomUUID(), versionNumber: 2 } } : start;
+    api.detail.mockResolvedValue(structuredClone(latest));
+    await w.toLibrary(); await w.openImage(image.id);
+    expect(w.draft.pending).toEqual(pending); expect(w.draft.pendingMarkerId).toBe(existing.id);
+    expect(w.errorText).toContain('先用原请求确认保存结果');
+    expect(w.updateMessage).toContain('先用原请求确认保存结果');
+    expect(w.updateMessage).not.toContain('请核对最新版本');
+    expect(w.draft.markers.find(row => row.id === emptyId)?.note).toBe('');
+    await w.reviewLatest(); expect(w.merge).toBeNull();
+    api.save.mockRejectedValueOnce(new RequestFailure('changed', 409, 'REVIEW_BASE_CHANGED'));
+    expect(await w.save()).toBe(false); expect(api.save.mock.calls[1][1]).toEqual(pending);
+    expect(w.draft.pending).toBeNull(); expect(w.updateMessage).toContain('请核对最新版本');
+  });
   it('P5 switches between independent images through discard protection and restores only the matching view and cache', async () => {
     const { w, api, session } = setup(); w.username = user.username; await w.enter(); await w.openImage(image.id);
     const otherId = crypto.randomUUID(); const other = { ...baseline, image: { ...image, id: otherId, originalName: 'two.png' }, revision: { ...baseline.revision, id: crypto.randomUUID(), imageId: otherId } };

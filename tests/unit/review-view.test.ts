@@ -1,7 +1,27 @@
 import { describe, expect, it } from 'vitest';
-import { fitScale, imageOffset, scrollToPoint, stageCanvasSize, stepScale, viewportCenter } from '../../src/client/review-view';
+import { fitScale, imageOffset, scrollToPoint, stageCanvasSize, stepScale, viewportCenter, wheelScale, zoomAtPosition } from '../../src/client/review-view';
 
 describe('review viewport geometry', () => {
+  it('preserves the image point under the cursor during wheel zoom at different DPRs', () => {
+    const image = { width: 2000, height: 1500 }; const viewport = { width: 799, height: 451 };
+    const scroll = { left: 700, top: 500 }; const position = { x: 143, y: 89 };
+    for (const ratio of [1, 1.25, 2]) {
+      const next = zoomAtPosition(image, viewport, 1, 1.7, scroll, position, ratio);
+      const before = imageOffset(image, viewport, 1, ratio); const after = imageOffset(image, viewport, 1.7, ratio);
+      expect((next.left + position.x - after.x) / 1.7).toBeCloseTo(scroll.left + position.x - before.x, 9);
+      expect((next.top + position.y - after.y) / 1.7).toBeCloseTo(scroll.top + position.y - before.y, 9);
+    }
+  });
+  it('clamps zoomed-out and edge scrolls while normalizing wheel delta units and limits', () => {
+    const image = { width: 2000, height: 1500 }; const viewport = { width: 600, height: 400 };
+    expect(zoomAtPosition(image, viewport, 1, 0.1, { left: 1500, top: 1000 }, { x: 550, y: 350 })).toEqual({ left: 0, top: 0 });
+    const edge = zoomAtPosition(image, viewport, 1, 4, { left: 0, top: 0 }, { x: 32, y: 32 });
+    expect(edge.left).toBe(0); expect(edge.top).toBe(0);
+    expect(wheelScale(1, 100, 1)).toBe(wheelScale(1, 1600));
+    expect(wheelScale(1, 1, 2, 500)).toBe(wheelScale(1, 500));
+    expect(wheelScale(0.05, 10000)).toBe(0.1); expect(wheelScale(4, -10000)).toBe(4);
+    expect(wheelScale(1, Number.NaN)).toBe(1);
+  });
   it('aligns centered originals to physical pixels while keeping anchor math consistent at different display scales', () => {
     const image = { width: 32, height: 24 }; const viewport = { width: 799, height: 451 };
     for (const ratio of [1, 1.25, 1.5, 2]) {

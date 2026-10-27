@@ -18,7 +18,7 @@ import { observeReviewUpdates, type UpdateStatus } from '../http/review-events';
 
 const activeKey = 'image-review:username:active'; const rememberedKey = 'image-review:username:remembered';
 const viewSchema = z.object({ mode: z.enum(['fit', 'manual']), manualScale: z.number().min(0.1).max(4), markerSize: z.number().min(12).max(48), anchor: z.object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1) }) });
-export function useWorkbench(deps: { api?: WorkbenchApi; preview?: Partial<PreviewDependencies>; updates?: typeof observeReviewUpdates } = {}) {
+export function useWorkbench(deps: { api?: WorkbenchApi; preview?: Partial<PreviewDependencies>; updates?: typeof observeReviewUpdates; beforeReview?: () => void } = {}) {
   const api = deps.api ?? workbenchApi(); const copy = createWorkingCopy(); const draft = copy.state;
   const user = ref<User | null>(null); const username = ref(''); const page = ref<'entry' | 'library' | 'review' | 'history'>('entry');
   const libraryBusy = ref(false); const libraryWarning = ref(''); const toast = createToast();
@@ -37,6 +37,7 @@ export function useWorkbench(deps: { api?: WorkbenchApi; preview?: Partial<Previ
     await loadLibrary(library.value.page, true, '上传结果请见各项状态');
     const rows = queue.state.items;
     if (rows.length === 1 && rows[0].status === 'success' && rows[0].image) await loadImage(rows[0].image.id);
+    if (queue.summary.value.success) toast.show(`已上传${queue.summary.value.success}张图片`);
   });
   const stage = shallowRef<{ reveal(point: Point): Promise<void>; restoreView(view: ViewSnapshot): Promise<void> }>();
   const preview = createLocalPreview(deps.preview); const image = preview.state;
@@ -47,6 +48,9 @@ export function useWorkbench(deps: { api?: WorkbenchApi; preview?: Partial<Previ
   const selected = computed(() => draft.markers.find(row => row.id === draft.selectedId) ?? null);
   const currentImage = computed(() => draft.base?.image ?? null);
   const errorText = computed(() => error.value || draft.error || image.error);
+  const unknownSaveMessage = '上次保存结果尚未确认，输入已保留，请先用原请求确认保存结果。';
+  const saveRecoveryMessage = computed(() => draft.busy ? '正在确认本次保存结果，请稍候。' : draft.failureCode === 'SAVE_RECONCILIATION_REQUIRED' ? '本条已保存，草稿恢复尚未完成，请用原请求继续确认。' : unknownSaveMessage);
+  const updateMessage = computed(() => draft.pending ? saveRecoveryMessage.value : remoteGone.value ? '这张图片已被删除。本地输入仍在，无法保存到原图；可复制说明后返回图片库。' : remoteChanged.value ? '已保存内容发生变化，本地输入已保留，请核对最新版本。' : syncWarning.value || '更新通知暂不可用；可手动核对，保存时仍检查版本。');
   const errorRequestId = computed(() => requestId.value || draft.requestId);
   const rail = computed<LibraryItem[]>(() => {
     const rows = library.value.items; const detail = draft.base;
@@ -127,6 +131,7 @@ export function useWorkbench(deps: { api?: WorkbenchApi; preview?: Partial<Previ
   });
   async function reviewLatest() {
     if (!draft.base || busy.value || copy.blocked() || queue.active() || deletePending.value || deleteDialog.value || merge.value) return;
+    deps.beforeReview?.();
     dialog.value = false; pendingNavigation = null; busy.value = true; error.value = ''; requestId.value = '';
     const base = draft.base;
     try {
@@ -169,7 +174,11 @@ export function useWorkbench(deps: { api?: WorkbenchApi; preview?: Partial<Previ
       copy.bind(detail);
       const cached = read('session', 'image-review:draft:' + id);
       if (cached) {
-        try { copy.restore(cached, id); if (draft.base!.revision.id !== detail.revision.id) { remoteChanged.value = true; error.value = '已保留较早版本的未保存输入，请读取最新并核对'; } }
+        try {
+          copy.restore(cached, id);
+          if (draft.base!.revision.id !== detail.revision.id) { remoteChanged.value = true; error.value = '已保留较早版本的未保存输入，请读取最新并核对'; }
+          if (draft.pending) error.value = unknownSaveMessage;
+        }
         catch { cacheWarning.value = '这张图片的临时缓存无法恢复，已读取服务端正式内容'; }
       }
       expandedIds.value = [];
@@ -335,5 +344,5 @@ export function useWorkbench(deps: { api?: WorkbenchApi; preview?: Partial<Previ
     } catch { cacheWarning.value = '上次进入状态无法恢复，请重新输入 username'; }
   });
   onUnmounted(() => { disposed = true; updateEpoch++; stopUpdates?.(); listGeneration++; queue.dispose(); toast.dismiss(); preview.dispose(); window.removeEventListener('beforeunload', beforeUnload); window.removeEventListener('focus', requestSync); });
-  return reactive({ page, user, username, busy, libraryBusy, libraryWarning, notice: toast.state, dismissToast: toast.dismiss, errorText, errorRequestId, cacheWarning, query, sort, layout, library, history, historyTotal, historical, historySelected, dialog, showChanges, historyExpandedIds, historyMarkers, changeLabel, activeMarkers, removedMarkers, expandedIds, focusRevision, uploads: queue.state, deleteDialog, deletePending, askDelete, cancelDelete, deleteImage, verifyDelete, retryUpload, stage, image, copy, draft, locked, blocked, selected, currentImage, rail, stageMarkers, merge, mergeChoices, mergeReady, remoteChanged, remoteGone, syncWarning, updateStatus, reviewLatest, cancelMerge, applyMerge, requestSync, enter, loadLibrary, toLibrary, openImage, save, saveMarker, resolveLeave, switchUser, uploadFiles, abandonUpload, reload, openHistory, selectHistory, moreHistory, backToReview, selectMarker, toggle, place, saveView, copyLink });
+  return reactive({ page, user, username, busy, libraryBusy, libraryWarning, notice: toast.state, dismissToast: toast.dismiss, errorText, saveRecoveryMessage, updateMessage, errorRequestId, cacheWarning, query, sort, layout, library, history, historyTotal, historical, historySelected, dialog, showChanges, historyExpandedIds, historyMarkers, changeLabel, activeMarkers, removedMarkers, expandedIds, focusRevision, uploads: queue.state, uploadSummary: queue.summary, deleteDialog, deletePending, askDelete, cancelDelete, deleteImage, verifyDelete, retryUpload, stage, image, copy, draft, locked, blocked, selected, currentImage, rail, stageMarkers, merge, mergeChoices, mergeReady, remoteChanged, remoteGone, syncWarning, updateStatus, reviewLatest, cancelMerge, applyMerge, requestSync, enter, loadLibrary, toLibrary, openImage, save, saveMarker, resolveLeave, switchUser, uploadFiles, abandonUpload, reload, openHistory, selectHistory, moreHistory, backToReview, selectMarker, toggle, place, saveView, copyLink });
 }

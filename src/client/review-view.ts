@@ -37,3 +37,19 @@ export function scrollToPoint(point: Point, image: Size, viewport: Size, scale: 
   const maxTop = Math.max(0, image.height * scale + stagePadding * 2 - viewport.height);
   return { left: Math.min(maxLeft, Math.max(0, offset.x + point.x * image.width * scale - viewport.width / 2)), top: Math.min(maxTop, Math.max(0, offset.y + point.y * image.height * scale - viewport.height / 2)) };
 }
+
+export function wheelScale(scale: number, delta: number, deltaMode = 0, viewportHeight = 400): number {
+  if (!Number.isFinite(scale) || scale <= 0 || !Number.isFinite(delta)) return 1;
+  const pixels = delta * (deltaMode === 1 ? 16 : deltaMode === 2 ? viewportHeight : 1);
+  return Math.min(4, Math.max(0.1, scale * Math.exp(-pixels * 0.0015)));
+}
+
+// Keep the same image point at the cursor, unless an edge limits the available scroll.
+export function zoomAtPosition(image: Size, viewport: Size, from: number, to: number, scroll: ScrollPosition, position: Point, pixelRatio?: number): ScrollPosition {
+  const oldOffset = imageOffset(image, viewport, from, pixelRatio);
+  const nextOffset = imageOffset(image, viewport, to, pixelRatio);
+  const x = Math.min(1, Math.max(0, (scroll.left + position.x - oldOffset.x) / (image.width * from)));
+  const y = Math.min(1, Math.max(0, (scroll.top + position.y - oldOffset.y) / (image.height * from)));
+  const canvas = stageCanvasSize(image, viewport, to);
+  return { left: Math.min(Math.max(0, canvas.width - viewport.width), Math.max(0, nextOffset.x + x * image.width * to - position.x)), top: Math.min(Math.max(0, canvas.height - viewport.height), Math.max(0, nextOffset.y + y * image.height * to - position.y)) };
+}

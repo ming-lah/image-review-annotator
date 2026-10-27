@@ -13,6 +13,18 @@ function setup(send = vi.fn(async (id: string, _file: File, _user: string) => { 
 afterEach(() => queues.splice(0).forEach(queue => queue.dispose()));
 
 describe('P5 sequential upload queue', () => {
+  it('summarizes progress and only actionable issues without dropping frozen files or successful items', async () => {
+    const { queue, send } = setup();
+    send.mockResolvedValueOnce(image('first')).mockRejectedValueOnce(new RequestFailure('invalid', 400, 'IMAGE_INVALID')).mockRejectedValueOnce(new RequestFailure('lost'));
+    await queue.start([file('ok.png'), file('bad.png'), file('unknown.png'), file('waiting.png')], 'actor');
+    expect(queue.summary.value).toMatchObject({ total: 4, completed: 2, success: 1, failed: 1 });
+    expect(queue.summary.value.issues.map(row => row.file.name)).toEqual(['bad.png', 'unknown.png']);
+    const unknown = queue.summary.value.unknown!; const original = send.mock.calls[2];
+    await queue.retry(unknown.id); expect(send.mock.calls[3]).toEqual(original);
+    expect(queue.summary.value).toMatchObject({ completed: 4, success: 3, failed: 1, unknown: undefined });
+    await queue.retry(queue.summary.value.issues[0].id);
+    expect(queue.summary.value.success).toBe(4); expect(queue.summary.value.issues).toEqual([]);
+  });
   it('rejects eleven files without requests and processes ten independent IDs serially', async () => {
     let concurrent = 0; let peak = 0;
     const { queue, send } = setup(vi.fn(async (id: string, _file: File, _user: string) => {

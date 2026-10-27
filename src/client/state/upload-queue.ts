@@ -1,12 +1,14 @@
-import { reactive } from 'vue';
+import { computed, reactive } from 'vue';
 import type { ImageDto } from '../../shared/review-contracts';
 import { RequestFailure } from '../http/review-api';
 import { previewFileError } from '../review';
 
 export type UploadStatus = 'waiting' | 'uploading' | 'success' | 'failed' | 'unknown' | 'abandoned';
 export interface UploadItem { id: string; file: File; status: UploadStatus; message: string; requestId: string; image: ImageDto | null }
+export interface UploadSummary { total: number; completed: number; success: number; failed: number; unknown: UploadItem | undefined; abandoned: number; issues: UploadItem[] }
 export function createUploadQueue(send: (id: string, file: File, userId: string) => Promise<ImageDto>, settled: () => Promise<void>) {
   const state = reactive({ items: [] as UploadItem[], userId: '', running: false, error: '' });
+  const summary = computed<UploadSummary>(() => ({ total: state.items.length, completed: state.items.filter(row => ['success', 'failed', 'abandoned'].includes(row.status)).length, success: state.items.filter(row => row.status === 'success').length, failed: state.items.filter(row => row.status === 'failed').length, unknown: state.items.find(row => row.status === 'unknown'), abandoned: state.items.filter(row => row.status === 'abandoned').length, issues: state.items.filter(row => ['failed', 'unknown', 'abandoned'].includes(row.status)) }));
   let disposed = false;
   const active = () => state.running || state.items.some(row => ['waiting', 'uploading', 'unknown'].includes(row.status));
   async function run() {
@@ -53,5 +55,5 @@ export function createUploadQueue(send: (id: string, file: File, userId: string)
     row.status = 'abandoned'; row.message = '已放弃等待，服务器可能已有图片，请核对图片库'; await run();
   }
   function clear() { if (!active()) { state.items = []; state.userId = ''; state.error = ''; } }
-  return { state, active, start, retry, abandon, clear, dispose: () => { disposed = true; } };
+  return { state, summary, active, start, retry, abandon, clear, dispose: () => { disposed = true; } };
 }

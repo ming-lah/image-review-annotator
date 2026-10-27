@@ -6,13 +6,25 @@ import type { MergeChoice, ReviewMerge } from '../state/review-merge';
 const props = defineProps<{ plan: ReviewMerge | null; choices: Record<string, MergeChoice | undefined>; ready: boolean; error: string }>();
 const emit = defineEmits<{ cancel: []; apply: []; choose: [id: string, choice: MergeChoice] }>();
 const dialog = ref<HTMLDialogElement>(); let previousFocus: HTMLElement | null = null;
+function captureFocus() { previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null; }
+function focusable(element: HTMLElement | null): element is HTMLElement {
+  return !!element?.isConnected && element !== document.body && !!element.getClientRects().length && !element.matches(':disabled') && !element.closest('[inert]');
+}
+defineExpose({ captureFocus });
 const version = computed(() => props.plan?.latest.revision.versionNumber ? `V${props.plan.latest.revision.versionNumber}` : '原始记录');
 const describe = (row: WorkingMarker | null) => row ? `${row.note || '（说明尚未填写）'}\n严重程度：${({ low: '低', medium: '中', high: '高' })[row.severity]} · 大小：${row.size ?? 24}px` : '已删除 / 不存在';
 watch(() => props.plan, async value => {
-  if (value) previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   await nextTick();
   if (value) dialog.value?.showModal();
-  else { dialog.value?.close(); if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true }); }
+  else {
+    dialog.value?.close();
+    // Let the parent unlock controls before restoring focus to the original trigger.
+    await nextTick();
+    if (props.plan) return;
+    const target = focusable(previousFocus) ? previousFocus : document.querySelector<HTMLElement>('[data-merge-return]');
+    if (focusable(target)) target.focus();
+    previousFocus = null;
+  }
 });
 </script>
 

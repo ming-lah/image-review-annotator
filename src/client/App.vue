@@ -2,18 +2,20 @@
 import { computed, nextTick, ref, watch, watchEffect } from 'vue';
 import ImageStage from './ImageStage.vue';
 import SortMenu from './components/SortMenu.vue';
+import UploadFeedback from "./components/UploadFeedback.vue";
 import ReviewMergeDialog from './components/ReviewMergeDialog.vue';
 import type { WorkingMarker } from '../shared/workbench-contracts';
 import { useWorkbench } from './state/use-workbench';
 import entryArt from './assets/entry.svg';
-const w = useWorkbench();
+const mergeDialog = ref<InstanceType<typeof ReviewMergeDialog>>();
+const w = useWorkbench({ beforeReview: () => mergeDialog.value?.captureFocus() });
 const imageStage = ref<InstanceType<typeof ImageStage>>();
 const leaveDialog = ref<HTMLDialogElement>(); const fileInput = ref<HTMLInputElement>();
 const deleteDialog = ref<HTMLDialogElement>();
 const mobilePane = ref<'canvas' | 'markers' | 'history'>('canvas');
-watch(() => [w.page, w.currentImage?.id], () => { mobilePane.value = 'canvas'; });
+const interactionTool = ref<'mouse' | 'point'>('mouse');
+watch([() => w.page, () => w.currentImage?.id], () => { mobilePane.value = 'canvas'; interactionTool.value = 'mouse'; });
 watch(mobilePane, async value => { if (value === 'canvas') { await nextTick(); const selected = w.stageMarkers.find(row => row.id === (w.page === 'history' ? w.historySelected : w.draft.selectedId)); if (selected) await imageStage.value?.reveal(selected); } });
-const uploadStatus = (value: string) => ({ waiting: '等待上传', uploading: '正在上传', success: '上传成功', failed: '上传失败', unknown: '结果未知，已暂停', abandoned: '已放弃等待' })[value] ?? value;
 watchEffect(() => { w.stage = imageStage.value; });
 const avatar = computed(() => Array.from(w.user?.username ?? '')[0] ?? '');
 const severityText = (value: string) => ({ low: '低', medium: '中', high: '高' })[value] ?? value;
@@ -21,6 +23,10 @@ const changeText = (value: string | null) => ({ add: '新增', modify: '已修�
 const time = (value?: string) => value ? new Date(value).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }) : '';
 const counts = computed(() => ({ add: w.draft.markers.filter(row => w.copy.kind(row.id) === 'add').length, modify: w.draft.markers.filter(row => w.copy.kind(row.id) === 'modify').length, delete: w.draft.removed.length }));
 const versionName = (revision?: { versionNumber: number; kind: string }) => !revision ? '' : revision.versionNumber > 0 ? `V${revision.versionNumber}` : revision.kind === 'import' ? '导入记录' : '原始图片';
+const canvasStatus = computed(() => {
+  const revision = w.page === 'history' ? w.historical?.revision : w.draft.base?.revision;
+  return `${versionName(revision)} · ${w.page === 'history' ? '保存于' : '上次保存'} ${time(revision?.savedAt)} · ${revision?.username ?? ''}`;
+});
 function setSize(row: WorkingMarker, event: Event) {
   const input = event.target as HTMLInputElement; const value = Number(input.value);
   row.size = Number.isFinite(value) ? Math.round(Math.max(12, Math.min(48, value))) : row.size ?? 24;
@@ -155,10 +161,10 @@ watch(() => w.deleteDialog, async value => {
       role="status"
     >
       <p class="wrap">
-        {{ w.remoteGone ? '这张图片已被删除。本地输入仍在，无法保存到原图；可复制说明后返回图片库。' : w.remoteChanged ? '已保存内容发生变化，本地输入已保留，请核对最新版本。' : w.syncWarning || '更新通知暂不可用；可手动核对，保存时仍检查版本。' }}
+        {{ w.updateMessage }}
       </p>
       <button
-        v-if="w.currentImage && !w.remoteGone"
+        v-if="w.currentImage && !w.remoteGone && !w.draft.pending"
         class="btn"
         :disabled="w.blocked || w.dialog"
         @click="w.reviewLatest"
@@ -179,7 +185,7 @@ watch(() => w.deleteDialog, async value => {
       role="alert"
     >
       <p class="wrap">
-        {{ w.errorText || '上次请求结果尚未确认，输入已保留。' }}
+        {{ w.draft.pending ? w.saveRecoveryMessage : w.errorText || '上次请求结果尚未确认，输入已保留。' }}
       </p><details v-if="w.errorRequestId">
         <summary>请求编号</summary><code>{{ w.errorRequestId }}</code>
       </details>
@@ -290,72 +296,14 @@ watch(() => w.deleteDialog, async value => {
             @change="chooseFile"
           >
         </div>
-        <section
-          v-if="w.uploads.items.length || w.uploads.error"
-          class="upload-results"
-          aria-label="上传结果"
-          :aria-busy="w.uploads.running"
-        >
-          <h2>上传图片 <span class="muted">{{ w.uploads.items.filter(item => ['success', 'failed', 'abandoned'].includes(item.status)).length }} / {{ w.uploads.items.length }}</span></h2>
-          <p
-            v-if="w.uploads.error"
-            class="error"
-            role="alert"
-          >
-            {{ w.uploads.error }}
-          </p>
-          <p class="small muted">
-            一次最多 10 张，逐张上传；刷新或关闭页面后不继续上传。
-          </p>
-          <ul>
-            <li
-              v-for="item in w.uploads.items"
-              :key="item.id"
-            >
-              <span class="upload-name wrap">{{ item.file.name }}</span>
-              <span
-                class="upload-state"
-                :class="{ error: item.status === 'failed' || item.status === 'unknown' }"
-                role="status"
-              >{{ uploadStatus(item.status) }}</span>
-              <p
-                v-if="item.message && item.status !== 'success'"
-                class="wrap small"
-              >
-                {{ item.message }}
-              </p>
-              <details v-if="item.requestId">
-                <summary>请求编号</summary><code>{{ item.requestId }}</code>
-              </details>
-              <div class="row upload-actions">
-                <button
-                  v-if="item.status === 'success' && item.image"
-                  class="btn"
-                  :disabled="w.blocked"
-                  @click="w.openImage(item.image!.id)"
-                >
-                  打开图片
-                </button>
-                <button
-                  v-if="item.status === 'failed' || item.status === 'unknown'"
-                  class="btn"
-                  :disabled="w.uploads.running || w.busy || w.uploads.items.some(row => row.status === 'unknown' && row.id !== item.id)"
-                  @click="w.retryUpload(item.id)"
-                >
-                  {{ item.status === 'unknown' ? '用原文件确认结果' : '重试本项' }}
-                </button>
-                <button
-                  v-if="item.status === 'unknown'"
-                  class="btn subtle"
-                  :disabled="w.uploads.running || w.busy"
-                  @click="w.abandonUpload(item.id)"
-                >
-                  放弃等待并继续
-                </button>
-              </div>
-            </li>
-          </ul>
-        </section>
+        <UploadFeedback
+          :summary="w.uploadSummary"
+          :running="w.uploads.running"
+          :busy="w.busy || w.draft.busy"
+          :error="w.uploads.error"
+          @retry="w.retryUpload"
+          @abandon="w.abandonUpload"
+        />
         <div class="tools">
           <form
             class="row search-form"
@@ -471,9 +419,7 @@ watch(() => w.deleteDialog, async value => {
             >
               {{ w.currentImage.originalName }}
             </h1>
-          </div><p class="small muted">
-            {{ versionName(w.page === 'history' ? w.historical?.revision : w.draft.base?.revision) }} · {{ w.page === 'history' ? '保存于' : '上次保存' }} {{ time(w.page === 'history' ? w.historical?.revision.savedAt : w.draft.base?.revision.savedAt) }} · {{ w.page === 'history' ? w.historical?.revision.username : w.draft.base?.revision.username }}
-          </p>
+          </div>
         </div>
         <div class="review-actions">
           <template v-if="w.page === 'review'">
@@ -497,6 +443,7 @@ watch(() => w.deleteDialog, async value => {
               复制链接
             </button><button
               class="btn"
+              data-merge-return
               :disabled="w.blocked"
               @click="w.reload"
             >
@@ -509,7 +456,7 @@ watch(() => w.deleteDialog, async value => {
               ◷ 查看历史
             </button><button
               class="btn primary"
-              :disabled="w.blocked || w.remoteGone || !w.copy.count()"
+              :disabled="w.blocked || w.remoteGone || !w.copy.count() || interactionTool !== 'point'"
               @click="w.save"
             >
               ✓ 保存全部修改
@@ -650,6 +597,8 @@ watch(() => w.deleteDialog, async value => {
             :disabled="w.locked"
             :read-only="w.page === 'history'"
             :temporary-labels="false"
+            :status="canvasStatus"
+            @tool="value => interactionTool = value"
             @place="point => { w.place(point); mobilePane = 'markers'; }"
             @select="id => { w.selectMarker(id); mobilePane = 'markers'; }"
             @view="w.saveView"
@@ -663,7 +612,10 @@ watch(() => w.deleteDialog, async value => {
           tabindex="-1"
         >
           <div class="inspector-heading">
-            <h2>标记 {{ w.activeMarkers.length }}</h2><button
+            <h2>标记 {{ w.activeMarkers.length }}</h2><span
+              v-if="interactionTool === 'mouse'"
+              class="pill gray"
+            >只读</span><button
               v-if="w.expandedIds.length"
               class="plain-button tiny"
               :disabled="w.blocked"
@@ -706,7 +658,7 @@ watch(() => w.deleteDialog, async value => {
                   >{{ w.expandedIds.includes(row.id) ? '−' : '+' }}</span>
                 </button>
                 <button
-                  v-if="w.copy.old(row.id)"
+                  v-if="w.copy.old(row.id) && interactionTool === 'point'"
                   class="marker-delete"
                   :aria-label="`删除标记 ${row.label}`"
                   title="删除标记"
@@ -721,87 +673,112 @@ watch(() => w.deleteDialog, async value => {
                 :id="`details-${row.id}`"
                 class="marker-description"
               >
-                <label
-                  class="field-label"
-                  :for="`note-${row.id}`"
-                >问题说明</label><textarea
-                  :id="`note-${row.id}`"
-                  v-model="w.draft.markers.find(marker => marker.id === row.id)!.note"
-                  class="note-input"
-                  maxlength="2000"
-                  :disabled="w.blocked"
-                  placeholder="描述这个位置需要修改的问题…"
-                /><p class="tiny">
-                  {{ row.note.trim().length }} / 2000{{ !row.note.trim() ? ' · 保存前请填写说明' : '' }}
-                </p><div class="field-row">
-                  <label
-                    class="field-label"
-                    :for="`severity-${row.id}`"
-                  >严重程度</label><select
-                    :id="`severity-${row.id}`"
-                    v-model="w.draft.markers.find(marker => marker.id === row.id)!.severity"
-                    class="severity-select"
-                    :disabled="w.blocked"
-                  >
-                    <option value="low">
-                      低
-                    </option><option value="medium">
-                      中
-                    </option><option value="high">
-                      高
-                    </option>
-                  </select>
-                </div><div class="point-size-field">
-                  <label
-                    class="field-label"
-                    :for="`size-${row.id}`"
-                  >大小</label>
-                  <input
-                    :id="`size-${row.id}`"
-                    type="range"
-                    min="12"
-                    max="48"
-                    step="1"
-                    :value="row.size ?? 24"
-                    :disabled="w.blocked"
-                    :aria-label="`标记 ${row.label} 大小`"
-                    @input="setSize(w.draft.markers.find(marker => marker.id === row.id)!, $event)"
-                  >
-                  <input
-                    type="number"
-                    min="12"
-                    max="48"
-                    step="1"
-                    :value="row.size ?? 24"
-                    :disabled="w.blocked"
-                    :aria-label="`标记 ${row.label} 大小像素值`"
-                    @change="setSize(w.draft.markers.find(marker => marker.id === row.id)!, $event)"
-                  ><span>px</span>
-                </div><div
-                  v-if="w.copy.old(row.id)"
-                  class="marker-author"
+                <div
+                  v-if="interactionTool === 'mouse'"
+                  class="readonly-marker"
                 >
-                  创建：{{ w.copy.old(row.id)!.createdByName }} · {{ time(w.copy.old(row.id)!.createdAt) }}<br>最后保存：{{ w.copy.old(row.id)!.updatedByName }} · {{ time(w.copy.old(row.id)!.updatedAt) }}
-                </div><p
-                  v-else
-                  class="tiny"
-                >
-                  本次新建 · 尚未保存
-                </p><div class="marker-actions">
-                  <button
-                    class="btn primary"
-                    :disabled="w.blocked || w.remoteGone || !w.copy.kind(row.id)"
-                    @click="savePoint(row.id)"
+                  <p class="history-note wrap">
+                    {{ row.note || '说明尚未填写' }}
+                  </p>
+                  <div class="field-row">
+                    <span>{{ severityText(row.severity) }}</span><span>{{ row.size ?? 24 }} px</span>
+                  </div>
+                  <p
+                    v-if="w.copy.old(row.id)"
+                    class="marker-author"
                   >
-                    保存
-                  </button><button
-                    class="btn subtle danger"
-                    :disabled="w.blocked"
-                    @click="cancelPoint(row.id)"
+                    {{ w.copy.old(row.id)!.updatedByName }} · {{ time(w.copy.old(row.id)!.updatedAt) }}
+                  </p>
+                  <p
+                    v-else
+                    class="tiny"
                   >
-                    取消
-                  </button>
+                    未保存草稿
+                  </p>
                 </div>
+                <template v-else>
+                  <label
+                    class="field-label"
+                    :for="`note-${row.id}`"
+                  >问题说明</label><textarea
+                    :id="`note-${row.id}`"
+                    v-model="w.draft.markers.find(marker => marker.id === row.id)!.note"
+                    class="note-input"
+                    maxlength="2000"
+                    :disabled="w.blocked"
+                    placeholder="描述这个位置需要修改的问题…"
+                  /><p class="tiny">
+                    {{ row.note.trim().length }} / 2000{{ !row.note.trim() ? ' · 保存前请填写说明' : '' }}
+                  </p><div class="field-row">
+                    <label
+                      class="field-label"
+                      :for="`severity-${row.id}`"
+                    >严重程度</label><select
+                      :id="`severity-${row.id}`"
+                      v-model="w.draft.markers.find(marker => marker.id === row.id)!.severity"
+                      class="severity-select"
+                      :disabled="w.blocked"
+                    >
+                      <option value="low">
+                        低
+                      </option><option value="medium">
+                        中
+                      </option><option value="high">
+                        高
+                      </option>
+                    </select>
+                  </div><div class="point-size-field">
+                    <label
+                      class="field-label"
+                      :for="`size-${row.id}`"
+                    >大小</label>
+                    <input
+                      :id="`size-${row.id}`"
+                      type="range"
+                      min="12"
+                      max="48"
+                      step="1"
+                      :value="row.size ?? 24"
+                      :disabled="w.blocked"
+                      :aria-label="`标记 ${row.label} 大小`"
+                      @input="setSize(w.draft.markers.find(marker => marker.id === row.id)!, $event)"
+                    >
+                    <input
+                      type="number"
+                      min="12"
+                      max="48"
+                      step="1"
+                      :value="row.size ?? 24"
+                      :disabled="w.blocked"
+                      :aria-label="`标记 ${row.label} 大小像素值`"
+                      @change="setSize(w.draft.markers.find(marker => marker.id === row.id)!, $event)"
+                    ><span>px</span>
+                  </div><div
+                    v-if="w.copy.old(row.id)"
+                    class="marker-author"
+                  >
+                    创建：{{ w.copy.old(row.id)!.createdByName }} · {{ time(w.copy.old(row.id)!.createdAt) }}<br>最后保存：{{ w.copy.old(row.id)!.updatedByName }} · {{ time(w.copy.old(row.id)!.updatedAt) }}
+                  </div><p
+                    v-else
+                    class="tiny"
+                  >
+                    本次新建 · 尚未保存
+                  </p><div class="marker-actions">
+                    <button
+                      class="btn marker-save"
+                      :disabled="w.blocked || w.remoteGone || !w.copy.kind(row.id)"
+                      @click="savePoint(row.id)"
+                    >
+                      保存
+                    </button><button
+                      class="btn subtle danger"
+                      :disabled="w.blocked"
+                      @click="cancelPoint(row.id)"
+                    >
+                      取消
+                    </button>
+                  </div>
+                </template>
               </div>
             </section>
           </div>
@@ -816,6 +793,7 @@ watch(() => w.deleteDialog, async value => {
               class="removed-row"
             >
               <span class="truncate">{{ row.note }}</span><button
+                v-if="interactionTool === 'point'"
                 class="btn subtle"
                 :disabled="w.blocked"
                 @click="w.copy.restoreRemoved(row.id)"
@@ -921,6 +899,7 @@ watch(() => w.deleteDialog, async value => {
     </template>
   </div>
   <ReviewMergeDialog
+    ref="mergeDialog"
     :plan="w.merge"
     :choices="w.mergeChoices"
     :ready="w.mergeReady"
