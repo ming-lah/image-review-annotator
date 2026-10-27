@@ -36,7 +36,7 @@ describe('owned basic demonstration package', () => {
     const before = fs.readFileSync(path.join(root, 'manifest.json'), 'utf8');
     await expect(prepareDemo(root)).rejects.toThrow('DEMO_ALREADY_EXISTS');
     expect(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8')).toBe(before);
-    await withServerInDirectory(path.join(root, 'data'), async ({ base }) => {
+    await withServerInDirectory(path.join(root, 'data'), async ({ base, fetch }) => {
       await expect(resetDemo(root)).rejects.toThrow('DEMO_DATA_IN_USE');
       expect((await fetch(base + '/api/ready')).ok).toBe(true);
       expect((await fetch(`${base}/api/images/${demoImageId}`)).ok).toBe(true);

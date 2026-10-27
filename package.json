@@ -10,6 +10,7 @@
     "dev": "node scripts/dev.mjs",
     "dev:server": "tsx src/server/server.ts",
     "dev:client": "node scripts/client.mjs",
+    "account": "tsx src/server/account-cli.ts",
     "build": "node scripts/clean-build.mjs && vite build && tsc -p tsconfig.server.json && node scripts/copy-migrations.mjs",
     "start": "node scripts/start.mjs",
     "lint": "eslint . --max-warnings 0",

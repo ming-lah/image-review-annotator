@@ -3,7 +3,7 @@ import { withIsolatedServer } from './isolated-server.js';
 import { imageBuffer, annotationInput } from './review-fixtures.js';
 
 try {
-  await withIsolatedServer(async ({ base }) => {
+  await withIsolatedServer(async ({ base, fetch }) => {
     const form = new FormData(); form.set('id', crypto.randomUUID()); form.set('file', new File([new Uint8Array(await imageBuffer())], 'sample.png', { type: 'image/png' }));
     const uploaded = await fetch(`${base}/api/images`, { method: 'POST', body: form }); assert.equal(uploaded.status, 201);
     const image = await uploaded.json() as { id: string };

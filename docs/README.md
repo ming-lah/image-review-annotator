@@ -8,7 +8,7 @@
 | [开发流程与文件职责](development.md) | spec 审批、代码结构、验证与 Git 约束 |
 | [测试入口](../tests/README.md) | 自动测试覆盖与最新实际结果 |
 | [待完成验收](../tests/manual/current.md) | 人工验收状态及隔离运行/清理方法 |
-| [手动回归集合](../tests/manual/regression.md) | G1–G38 的唯一操作步骤、预期与原因 |
+| [手动回归集合](../tests/manual/regression.md) | G1–G47 的唯一操作步骤、预期与原因 |
 | [演示与样本](../tests/manual/basic-demo.md) | 固定数据、格式样本、重置与保留规则 |
 
 当前状态只在测试入口/待完成验收维护，不在设计和流程中堆叠历史通过数量。旧版本资料通过 Git 历史追溯，不保留可误认为现产品的原型入口。

@@ -1,9 +1,9 @@
 import sharp from 'sharp';
-import request from 'supertest';
+import { authenticatedRequest as request, testActor } from './auth-fixtures.js';
 import type { Express } from 'express';
 import { randomUUID } from 'node:crypto';
 
-export const actor = { actorId: randomUUID(), actorName: '测试人员' };
+export const actor = testActor;
 export const annotationInput = (extra: Record<string, unknown> = {}) => ({ id: randomUUID(), x: 0.25, y: 0.75, note: ' 标记说明 ', severity: 'medium', ...actor, ...extra });
 export const imageBuffer = (format: 'png' | 'jpeg' | 'webp' = 'png', width = 32, height = 24) => sharp({ create: { width, height, channels: 3, background: '#27a7cc' } }).toFormat(format).toBuffer();
 export function uploadImage(app: Express, bytes: Buffer, id: string = randomUUID(), filename = 'sample.png', contentType = 'image/png') {

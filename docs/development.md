@@ -21,12 +21,14 @@
 | src/client/state/use-workbench.ts | 页面/身份/图库/历史/同步/队列等衔接 |
 | src/client/state/ | 工作副本、持久化、核对、身份、上传队列和Toast |
 | src/client/review*.ts、stage-resize.ts、tab-session.ts等 | 坐标、标记会话、测量调度、预览及标签页缓存逻辑 |
+| src/server/account-cli.ts、account-store.ts | 本机账号命令与不扫描原图的数据库访问 |
+| src/server/passwords.ts | 有界异步密码哈希 |
 | src/server/app.ts、server.ts | Express装配、启动就绪、静态页面与停服 |
 | src/server/http/ | 路由、上传中间件、输入/错误适配、SSE连接 |
 | src/server/persistence/ | SQLite仓库、操作人、原图与整图删除 |
 | src/server/config.ts、storage.ts、logger.ts | 配置、迁移/目录就绪及日志 |
 | src/shared/ | schema、DTO与共享类型，不引入Node专属依赖 |
-| migrations/ | 001–005正式SQL，历史校验和不改写 |
+| migrations/ | 001–006正式SQL，历史校验和不改写 |
 | scripts/ | dev/client/start/clean-build/copy-migrations正式运行脚本 |
 | tests/unit/ | 纯逻辑、队列和无DOM状态回归 |
 | tests/integration/ | Supertest、SQLite、真实HTTP/子进程回归 |

@@ -8,7 +8,6 @@ import { randomUUID } from 'node:crypto';
 import type { Storage } from '../storage.js';
 import { reviewRepository } from '../persistence/review-repository.js';
 import { workbenchRepository } from '../persistence/workbench-repository.js';
-import { legacyUserId, usersRepository } from '../persistence/users.js';
 import { validateImage } from '../persistence/image-files.js';
 import { ApiFailure, parseInput } from './errors.js';
 import { imageManagement } from '../persistence/image-management.js';
@@ -16,6 +15,7 @@ import { deleteImageSchema } from '../../shared/workbench-contracts.js';
 import { createAnnotationSchema, deleteAnnotationSchema, updateAnnotationSchema, uuidSchema } from '../../shared/review-contracts.js';
 import type { ReviewEvents } from './review-events.js';
 import { logger } from '../logger.js';
+import { authenticatedBody, currentUser, requireAdmin } from './auth.js';
 
 export function reviewRoutes(storage: Storage, events: ReviewEvents) {
   const router = Router();
@@ -73,8 +73,7 @@ export function reviewRoutes(storage: Storage, events: ReviewEvents) {
       installed = storage.files.install(file.filename, id, validated.ext);
       const now = new Date().toISOString();
       const image = { id, originalName, mimeType: validated.mimeType, width: validated.width, height: validated.height, fileSize: validated.fileSize, sha256: validated.sha256, createdAt: now, updatedAt: now };
-      const userId = req.header('x-user-id') ? parseInput(uuidSchema, req.header('x-user-id')) : legacyUserId;
-      usersRepository(storage.db).requireUser(userId);
+      const userId = currentUser(res).userId;
       storage.db.transaction(() => { management.requireLiveId(id); repository.insertImage(image, installed!); history.initialize(id, userId); }).immediate();
       installed = undefined;
       changed(id);
@@ -90,8 +89,9 @@ export function reviewRoutes(storage: Storage, events: ReviewEvents) {
     res.json(repository.detail(id));
   });
   router.delete('/images/:id', (req, res) => {
+    requireAdmin(res);
     storage.checkReady();
-    const id = parseInput(uuidSchema, req.params.id); const value = parseInput(deleteImageSchema, req.body);
+    const id = parseInput(uuidSchema, req.params.id); const value = parseInput(deleteImageSchema, authenticatedBody(req.body, currentUser(res)));
     Object.assign(res.locals, { imageId: id, actorId: value.userId });
     // Validate the file boundary before committing a logical deletion, even if the original is missing.
     storage.files.contentPath(repository.storageKey(id));
@@ -114,7 +114,7 @@ export function reviewRoutes(storage: Storage, events: ReviewEvents) {
   router.post('/images/:id/annotations', (req, res) => {
     storage.checkReady();
     const imageId = parseInput(uuidSchema, req.params.id);
-    const value = parseInput(createAnnotationSchema, req.body);
+    const value = parseInput(createAnnotationSchema, authenticatedBody(req.body, currentUser(res), true));
     Object.assign(res.locals, { imageId, annotationId: value.id, actorId: value.actorId });
     const result = repository.create(imageId, value);
     if (result.created) changed(imageId);
@@ -123,7 +123,7 @@ export function reviewRoutes(storage: Storage, events: ReviewEvents) {
   router.patch('/annotations/:id', (req, res) => {
     storage.checkReady();
     const id = parseInput(uuidSchema, req.params.id);
-    const value = parseInput(updateAnnotationSchema, req.body);
+    const value = parseInput(updateAnnotationSchema, authenticatedBody(req.body, currentUser(res), true));
     Object.assign(res.locals, { annotationId: id, actorId: value.actorId });
     const result = repository.update(id, value);
     changed(result.imageId);
@@ -132,7 +132,7 @@ export function reviewRoutes(storage: Storage, events: ReviewEvents) {
   router.delete('/annotations/:id', (req, res) => {
     storage.checkReady();
     const id = parseInput(uuidSchema, req.params.id);
-    const value = parseInput(deleteAnnotationSchema, req.body);
+    const value = parseInput(deleteAnnotationSchema, authenticatedBody(req.body, currentUser(res), true));
     Object.assign(res.locals, { annotationId: id, actorId: value.actorId });
     const imageId = repository.requireAnnotation(id).imageId;
     repository.remove(id, value);

@@ -6,15 +6,15 @@ import { openStorage, checkDirectory } from '../../src/server/storage.js';
 import { tempDir } from '../support/helpers.js';
 
 describe('API contract', () => {
-  it('returns real health/ready and JSON 404 for all unknown API paths', async () => {
+  it('returns real health/ready and requires authentication before unknown business API paths', async () => {
     const storage = openStorage(tempDir());
     try {
       const app = createApp(storage);
       expect((await request(app).get('/api/health').expect(200)).body).toEqual({ status: 'ok' });
       expect((await request(app).get('/api/ready').expect(200)).body).toEqual({ status: 'ready' });
       for (const url of ['/api/unknown', '/api', '/api/unknown?secret=private']) {
-        const result = await request(app).get(url).expect(404).expect('Content-Type', /json/);
-        expect(result.body.error.code).toBe('API_NOT_FOUND');
+        const result = await request(app).get(url).expect(401).expect('Content-Type', /json/);
+        expect(result.body.error.code).toBe('AUTH_REQUIRED');
         expect(result.body.error.requestId).toBe(result.headers['x-request-id']);
       }
     } finally { storage.close(); }

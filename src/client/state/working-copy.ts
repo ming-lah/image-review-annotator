@@ -60,6 +60,7 @@ export function createWorkingCopy() {
   }
   async function save(userId: string, send: (imageId: string, payload: SaveReview) => Promise<SaveResult>, markerId?: string, readSaved?: (imageId: string, revisionId: string) => Promise<WorkspaceDetail>) {
     if (state.busy || !state.base) return false;
+    if (state.pending && state.pending.userId !== userId) { state.error = '请用原账号登录后确认这次保存'; state.failureCode = 'AUTH_CONTEXT_CHANGED'; return false; }
     if (!state.pending) {
       if (!count()) return true;
       let markers = state.markers.filter(row => !state.removed.includes(row.id));

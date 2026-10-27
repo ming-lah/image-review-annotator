@@ -14,7 +14,7 @@ describe('configuration', () => {
     expect(() => readConfig({ DATA_DIR: '' })).toThrow('DATA_DIR');
   });
   it('accepts absolute override and explicit host', () => {
-    expect(readConfig({ DATA_DIR: path.resolve('tests/.tmp/config-only'), HOST: '0.0.0.0', PORT: '4000' })).toMatchObject({ port: 4000, host: '0.0.0.0' });
+    expect(readConfig({ DATA_DIR: path.resolve('tests/.tmp/config-only'), HOST: '0.0.0.0', PORT: '4000', APP_ORIGIN: 'https://review.example.test' })).toMatchObject({ port: 4000, host: '0.0.0.0' });
   });
   it('rejects an empty HOST', () => expect(() => readConfig({ HOST: '' })).toThrow('HOST'));
   it('uses Windows LOCALAPPDATA and fallback', () => {

@@ -1,18 +1,18 @@
 import { describe, expect, it, vi } from 'vitest';
-import request from 'supertest';
+import { authenticatedRequest as request, setTestUser } from '../support/auth-fixtures.js';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import * as imageValidation from '../../src/server/persistence/image-files.js';
 import { logger } from '../../src/server/logger.js';
-import { createApp } from '../../src/server/app.js';
+import { createTestApp as createApp } from '../support/auth-fixtures.js';
 import { openStorage } from '../../src/server/storage.js';
 import { tempDir } from '../support/helpers.js';
 import { imageBuffer } from '../support/review-fixtures.js';
 
 async function setup() {
   const root = tempDir(); const storage = openStorage(root); const app = createApp(storage);
-  const user = (await request(app).post('/api/workbench/users/enter').send({ username: '删除测试' }).expect(200)).body as { userId: string };
+  const user = setTestUser(app, '删除测试');
   const bytes = await imageBuffer();
   const upload = (id: string = randomUUID(), name = 'same.png') => request(app).post('/api/images').set('X-User-Id', user.userId).field('id', id).attach('file', bytes, { filename: name, contentType: 'image/png' });
   const image = (await upload().expect(201)).body as { id: string };
@@ -83,7 +83,7 @@ describe('P5 image lifecycle', () => {
     const s = await setup();
     try {
       await request(s.app).delete(`/api/images/${s.image.id}`).send({ userId: s.user.userId }).expect(400);
-      await request(s.app).delete(`/api/images/${s.image.id}`).send({ userId: randomUUID(), baseRevisionId: s.base }).expect(400);
+      await request(s.app).delete(`/api/images/${s.image.id}`).send({ userId: randomUUID(), baseRevisionId: s.base }).expect(403);
       const saved = (await request(s.app).post(`/api/workbench/images/${s.image.id}/saves`).send({ requestId: randomUUID(), userId: s.user.userId, baseRevisionId: s.base, markers: [{ id: randomUUID(), x: 0.1, y: 0.2, note: 'new', severity: 'high' }] }).expect(200)).body;
       const conflict = await s.remove().expect(409);
       expect(conflict.body.error.code).toBe('REVIEW_BASE_CHANGED'); expect(conflict.body.error.requestId).toBeTruthy();
