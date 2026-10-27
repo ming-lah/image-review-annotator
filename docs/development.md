@@ -8,7 +8,7 @@
 
 实现后记录实际检查和未覆盖边界；仍待用户验收的保持active，真正完成后转completed，被替代的旧方案转archive。提交代码或整理文档不等于用户验收。
 
-文档各司其职：README负责启动和导航；docs/design描述当前行为/架构；本文描述工作方式；docs/submission描述交付限制；tests/README维护自动覆盖与最新结果；tests/manual/current记录人工待办，regression保存唯一完整用例，basic-demo说明测试材料。
+文档各司其职：README负责使用、启动和导航；docs/design描述当前行为、架构及限制；本文描述工作方式；tests/README维护自动覆盖与最新结果；tests/manual/current记录人工待办，regression保存唯一完整用例，basic-demo说明测试材料。
 
 ## 文件职责
 
@@ -49,6 +49,10 @@
 默认用户DATA_DIR、既有人工数据、其他项目及全局缓存不能作为自动测试目标。演示只用既有demo:prepare/reset并遵守归属/活动数据保护，见[演示说明](../tests/manual/basic-demo.md)。删除目标先核对绝对路径与非联接；自动审批拒绝时保留并报告，不换方式绕过。
 
 ## Git
+
+仓库的 GitHub Actions CI 在推送 main 和针对 main 的 pull request 上运行 Windows / Node 24 检查：npm ci、lint、typecheck、全量测试、build、非法标记复现、生产 HTTP 检查。生产检查使用前一步构建；默认端口断言保留，端口冲突必须报告。CI 不使用浏览器自动化、密钥或发布权限，不替代手动验收。
+
+工作流首次推送后需查看实际运行结果。是否要求 PR 和将该检查设为 main 的必需状态检查，需要另行审核并配置仓库规则；单有工作流不会阻止直接推送。若未来启用 merge queue，需增加 merge_group 触发。
 
 开始前核对Git根、分支、完整脏工作区及暂存区，保留用户改动。默认采用main加短期分支/PR；新分支使用codex/前缀。用户明确要求当前分支提交时可按授权本地提交，不自动推送、合并或发版，不终止用户应用。
 

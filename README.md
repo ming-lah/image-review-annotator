@@ -1,60 +1,83 @@
-# Image Review Annotator · V1
+# Image Review Annotator
 
-本地图片审阅 Web 工作台：昵称进入 → 图片库 → 鼠标浏览或打点编辑 → 保存当前点或全部修改 → 查看完整版本。支持多图上传/删除、草稿恢复、三方核对和 SSE 已保存通知。昵称用于记录操作人，不是认证。
+本地图片审阅工作台：上传图片，在图上标注问题、保存版本，并与同一服务的其他使用者核对修改。昵称只用于记录操作人，不是登录认证；默认仅本机访问，不要直接暴露到公网。
 
-## 运行
+## 安装与启动
 
-使用 Node.js 24.x；依赖版本以 package-lock.json 为准。
+需要 Node.js 24.x，在项目根目录执行：
 
 ```bash
 npm ci
 npm run dev
 ```
 
-开发页面 [127.0.0.1:5174](http://127.0.0.1:5174)，API 为 127.0.0.1:3002，Vite 代理 /api。任一端失败会共同退出；Ctrl+C 只停止本次实例。后端源码修改后重启自己的实例。
+打开 [http://127.0.0.1:5174](http://127.0.0.1:5174)，输入昵称进入图库。开发前端通过 `/api` 代理到 3002；在启动终端按 `Ctrl+C` 停止本次实例。后端源码修改后需重启自己的实例。
+
+使用生产构建时：
 
 ```bash
 npm run build
 npm run start
 ```
 
-生产页面与 API 同源位于 [127.0.0.1:3002](http://127.0.0.1:3002)，无需 Vite。
+打开 [http://127.0.0.1:3002](http://127.0.0.1:3002)，页面与 API 由同一服务提供。端口冲突会明确报错，不会自动换端口或停止其他应用。
 
-| 环境变量 | 默认与边界 |
+| 环境变量 | 默认值与用途 |
 |---|---|
-| HOST | 127.0.0.1；显式覆盖才向其他网卡监听 |
-| PORT | 3002；开发代理跟随，不自动换端口 |
-| VITE_PORT | 5174；开发前端端口 |
-| DATA_DIR | 绝对路径；未设置时采用系统应用数据目录，见[设计](docs/design.md#数据与存储) |
+| `HOST` | `127.0.0.1`；显式修改才监听其他网卡 |
+| `PORT` | `3002`；开发代理随之调整 |
+| `VITE_PORT` | `5174`；开发页面端口 |
+| `DATA_DIR` | 绝对路径；未设置时使用系统应用数据目录，详见[数据与存储](docs/design.md#数据与存储) |
 
-人工验证请使用 [隔离运行方法](tests/manual/current.md#准备与运行)，不要将测试写进默认用户数据。演示包用 `npm run demo:prepare` 首次生成；已有包无需重复生成。明确放弃演示修改时，停止自己的演示实例后执行 `npm run demo:reset`，详见[演示说明](tests/manual/basic-demo.md)。
+例如 PowerShell 中为本次手动练习指定隔离目录：
 
-## 验证与文档
-
-```bash
-npm run lint
-npm run typecheck
-npm test
-npm run build
-npm run repro:invalid-annotation
-npm run test:production
+```powershell
+$env:DATA_DIR = Join-Path (Get-Location) 'tests/.tmp/manual-workbench/data'
+npm run dev
 ```
 
-生产 HTTP 检查需要先 build。页面交互和视觉由用户手动验收，不使用浏览器自动化。
+命令在项目根目录运行。该环境变量对当前 PowerShell 会话中的后续启动也生效；结束后可执行 `Remove-Item Env:DATA_DIR` 恢复默认设置。隔离数据的保留和清理方法见[手动验收准备](tests/manual/current.md#准备与运行)。
 
-- [测试入口与最新结果](tests/README.md)：单元、API、SQLite、进程及生产 HTTP 检查。
-- [待完成的手动验收](tests/manual/current.md)、[唯一手动回归集合](tests/manual/regression.md)、[演示与样本](tests/manual/basic-demo.md)。
-- [当前设计](docs/design.md)、[开发流程与文件职责](docs/development.md)、[交付范围与限制](docs/submission.md)、[文档索引](docs/README.md)。
-- [项目协作约束](AGENTS.md)；本地 spec 与推进索引位于被 Git 忽略的 workspace/。
+## 基本使用
+
+1. 输入 1–40 字昵称进入图库，选择 1–10 张静态 PNG、JPEG 或 WebP 上传。单张成功后进入图片，多张成功后留在图库；图库支持搜索、排序、分页和网格/列表切换。
+2. 图片默认处于“鼠标”模式：拖动浏览、滚轮缩放，标记只读。切换到“打点”模式，在图片内点击以新增标记，填写说明、严重程度和大小。
+3. 点编辑区的“保存”只保存当前点；顶部“保存全部修改”提交全部有效改动。离开、切图或切换昵称时，按提示处理尚未保存的草稿。
+4. 选择“查看历史”浏览每次有效保存形成的完整版本和变化；历史只读。删除整图需要确认，会同时删除原图、标记和全部历史，无法撤销。
+
+说明为 1–2000 字符；单图不超过 20 MiB、任一边不超过 12000 像素且总像素不超过 4000 万。动画和非正常 EXIF 方向的图片会被拒绝。详细行为见[设计](docs/design.md#产品行为)。
+
+## 使用案例
+
+### 只保存一个问题，继续编辑其他问题
+
+打开一张图片，切换“打点”，分别新增两个点；给第一个填写说明，第二个先留空。在第一个点的编辑区点击“保存”。第一个点成为正式内容，第二个仍是草稿；补完后可单独保存或使用“保存全部修改”。要核对服务端结果，可以在同一服务的独立浏览器打开图片链接；同标签页刷新可能恢复本地草稿，不应据此判断全部已保存。正式验收步骤见 [G31](tests/manual/regression.md#窗口与当前点保存)。
+
+### 两人审阅同一张图
+
+在本机两个独立浏览器（或普通窗口和独立隐私窗口）访问同一个地址，以不同昵称打开同一图片链接。双方先各自留下草稿，A 保存后，B 使用“读取最新并核对”。不同点的修改可以一并保留；同一点出现冲突时，B 选择采用的整条内容，应用核对结果后再保存。若核对期间又有人保存，需再次核对。这个流程不广播正在输入的内容，也不提供账号权限；详见 [G21–G26](tests/manual/regression.md#协作与请求恢复)。
+
+### 用固定样本练习与复现
+
+首次在项目根目录执行 `npm run demo:prepare`，然后按[演示数据说明](tests/manual/basic-demo.md#准备与启动)设置演示专用 `DATA_DIR` 并启动。打开文档中的演示图入口，可用网格图与已有标记练习打点、缩放和保存；样本还包括损坏、动画及超限文件。已有演示包无需再次准备。`npm run demo:reset` 会放弃演示包内的修改，仅在明确需要重置且自己的演示实例已停止时使用。
+
+网络中断后若保存或上传显示结果未确认，按界面提示用原请求或原文件确认；不要把未知结果当作失败或成功。完整人工用例、预期和原因见[手动回归](tests/manual/regression.md)。
+
+## 数据与备份
+
+原图和 SQLite 数据保存在 `DATA_DIR`；同标签页仅尽力恢复未保存草稿，不能代替正式保存。备份时先停止自己的服务，再复制整个数据目录；恢复前同样停服。删除图片不可撤销，恢复演练应使用隔离数据，详见[存储说明](docs/design.md#数据与存储)。
+
+## 项目与验证
 
 ```text
-src/client/    Vue 页面、组件、HTTP 客户端、状态和坐标逻辑
-src/server/    Express、路由、配置、存储和迁移执行
-src/shared/    共享 schema、DTO 与类型
-migrations/    正式 SQL 迁移
-scripts/       正式开发、构建和启动脚本
-tests/         自动测试、辅助代码、手动集合及 .tmp/ 隔离数据
-docs/          当前设计、开发与交付文档
-workspace/     本地 spec 与推进索引，Git 忽略
-dist/          构建产物，Git 忽略
+src/client/   Vue 页面、组件、状态和 HTTP 客户端
+src/server/   Express、SQLite 持久化、配置与启动
+src/shared/   前后端共享契约
+migrations/   正式 SQL 迁移
+scripts/      开发、构建与启动脚本
+tests/        自动测试、手动验收和隔离测试数据
+docs/         设计与开发流程
+workspace/    Git 忽略的本地 spec
 ```
+
+开发验证、CI、当前结果及手动待办分别见[开发流程](docs/development.md)、[测试入口](tests/README.md)和[当前验收](tests/manual/current.md)。项目协作约束见 [AGENTS.md](AGENTS.md)；页面交互与视觉由用户手动验收。

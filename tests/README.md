@@ -1,6 +1,6 @@
 # 测试入口
 
-更新：2026-10-27。保留全部25份正式自动测试，按当前职责维护，不按旧阶段删除兼容回归。页面交互/视觉由用户手动执行，不使用Playwright或其他浏览器自动化。
+更新：2026-10-27。保留全部25份正式自动测试，按当前职责维护，不按旧阶段删除兼容回归。页面交互/视觉由用户手动执行，不使用Playwright或其他浏览器自动化。下方为文档及 CI 整理时本地实际结果；GitHub 运行状态以 [Actions](https://github.com/ming-lah/image-review-annotator/actions) 为准。
 
 ## 命令与最新结果
 
@@ -23,7 +23,7 @@ npm run test:production
 | build | 通过，135模块；构建不是页面验收 |
 | repro:invalid-annotation | 通过，真实隔离进程空说明/越界均400，稳定错误码/requestId且无标记写入 |
 | test:production | 最终构建后通过，真实生产HTTP页面/资源、昵称/图库、当前点/全部保存、SSE、大小/版本/回执、原图、删除/防复活和重启 |
-| demo:reset | 通过，16样本/5条正式标记，真实API校验及重启/原图字节一致；仅重置basic-demo |
+| demo:reset | 本轮未执行；此前 16 样本/5 条正式标记的真实 API 校验及重启/原图字节一致，见演示说明 |
 
 本轮未停止用户应用、改默认端口或跳过失败断言。A1需用户协调3002/5174均空闲后重跑`npm test`；可先用`npm test -- tests/integration/dev.test.ts`复核默认端口。不要把现有服务ready当作测试新启动成功。
 
@@ -102,4 +102,4 @@ tests/
 
 ## 资源与清理
 
-演示basic-demo已按本轮授权重建；manual-p2/manual-p4/manual-workbench等人工数据保留。前段pw-20261027、bvfix-20261027、canvas-20261027浏览器和测试服务已关闭；本轮仅针对这三个旧目录的清理再次被自动审批以blocked by policy拒绝，命令未执行，目录保留，没有换方式绕过。只清理核实绝对路径/非联接/归属且已停止的单个目标，禁止清理整个tests/.tmp或全局浏览器数据。
+先前演示basic-demo按当时授权重建；manual-p2/manual-p4/manual-workbench等人工数据保留。前段pw-20261027、bvfix-20261027、canvas-20261027浏览器和测试服务已关闭；先前针对这三个旧目录的清理被自动审批以blocked by policy拒绝，命令未执行，目录保留，没有换方式绕过。本轮未重新尝试清理。只清理核实绝对路径/非联接/归属且已停止的单个目标，禁止清理整个tests/.tmp或全局浏览器数据。
