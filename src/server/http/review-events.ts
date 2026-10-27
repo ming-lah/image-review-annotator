@@ -4,7 +4,7 @@ import { ApiFailure } from './errors.js';
 
 export function createReviewEvents() {
   const clients = new Set<Response>();
-  function connect(res: Response) {
+  function connect(res: Response, authorized: () => boolean = () => true) {
     if (clients.size >= 128) throw new ApiFailure(503, 'EVENT_CLIENT_LIMIT', '更新通知连接过多，请稍后重试');
     res.status(200).set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
     clients.add(res);
@@ -13,7 +13,12 @@ export function createReviewEvents() {
       try { if (!res.write(chunk)) { cleanup(); res.destroy(); } }
       catch { cleanup(); res.destroy(); }
     };
-    const heartbeat = setInterval(() => write(': heartbeat\n\n'), 15000);
+    const heartbeat = setInterval(() => {
+      try {
+        if (!authorized()) { write('event: auth.required\ndata: {}\n\n'); cleanup(); res.end(); return; }
+        write(': heartbeat\n\n');
+      } catch { cleanup(); res.destroy(); }
+    }, 15000);
     heartbeat.unref();
     res.once('close', cleanup); res.once('error', cleanup);
     write(': connected\n\n');

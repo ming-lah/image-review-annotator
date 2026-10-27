@@ -1,9 +1,9 @@
 import { reviewEventSchema, type ReviewEvent } from '../../src/shared/collaboration-contracts.js';
 
 // Real HTTP stream helper; no browser or default user data is involved.
-export async function readReviewEvents(base: string) {
+export async function readReviewEvents(base: string, fetcher: typeof fetch) {
   const controller = new AbortController();
-  const response = await fetch(base + '/api/events', { signal: controller.signal });
+  const response = await fetcher(base + '/api/events', { signal: controller.signal });
   if (response.status !== 200 || !response.headers.get('content-type')?.startsWith('text/event-stream')) throw new Error('Event stream unavailable');
   const reader = response.body!.getReader(); const decoder = new TextDecoder();
   const events: ReviewEvent[] = []; let buffer = ''; let stopped = false; let failure: unknown;

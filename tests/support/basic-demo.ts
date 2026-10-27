@@ -77,7 +77,7 @@ async function prepare(root: string, boundaries: boolean): Promise<DemoManifest>
   // An interrupted package is retained for inspection and can only be reset after it is stopped.
   const fixtureRoot = path.join(root, 'fixtures');
   const fixtures = await generateDemoFixtures(fixtureRoot, boundaries);
-  await withIsolatedServer(async ({ base }) => {
+  await withIsolatedServer(async ({ base, fetch }) => {
       for (const fixture of fixtures) {
         const bytes = fs.readFileSync(path.join(fixtureRoot, fixture.name));
         const form = new FormData();
@@ -97,9 +97,13 @@ async function prepare(root: string, boundaries: boolean): Promise<DemoManifest>
         }
       }
   });
-  return withServerInDirectory(path.join(root, 'data'), async ({ base, restart }) => {
+  return withServerInDirectory(path.join(root, 'data'), async ({ base, restart, signIn }) => {
+      const clientA = await signIn(actorA.actorName, actorA.actorId);
+      const clientB = await signIn(actorB.actorName, actorB.actorId);
+      const fetch = clientA.fetch;
       const call = async (route: string, method = 'GET', value?: unknown) => {
-        const result = await fetch(base + route, { method, headers: value ? { 'Content-Type': 'application/json' } : {}, body: value ? JSON.stringify(value) : undefined, signal: AbortSignal.timeout(20000) });
+        const client = (value as { actorId?: string } | undefined)?.actorId === actorB.actorId ? clientB : clientA;
+        const result = await client.fetch(base + route, { method, headers: value ? { 'Content-Type': 'application/json' } : {}, body: value ? JSON.stringify(value) : undefined, signal: AbortSignal.timeout(20000) });
         if (!result.ok) throw new Error(`DEMO_API_FAILED_${result.status}`);
         return result;
       };
@@ -131,7 +135,7 @@ async function prepare(root: string, boundaries: boolean): Promise<DemoManifest>
       assert.equal(createHash('sha256').update(content).digest('hex'), imageSha);
       const manifest: DemoManifest = { schemaVersion: 1, fixtures, image: { id: demoImageId, path: `/?imageId=${demoImageId}`, sha256: imageSha }, annotations: after.annotations, deletedNumbers: [2], nextNumber: 7, verification: { fixtureApi: true, restart: true, bytesMatch: true, noUnsavedDrafts: true } };
       fs.writeFileSync(path.join(root, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n', { flag: 'wx' });
-      fs.writeFileSync(path.join(root, 'OPEN-DEMO.txt'), `IMAGE REVIEW BASIC DEMO\n\nFrom the repository root (PowerShell):\n$env:HOST = '127.0.0.1'\n$env:PORT = '3002'\n$env:VITE_PORT = '5174'\n$env:DATA_DIR = (Resolve-Path 'tests/.tmp/basic-demo/data').Path\nnpm run dev\n\nOpen: http://127.0.0.1:5174${manifest.image.path}\nProduction: http://127.0.0.1:3002${manifest.image.path}\n\nSee tests/manual/basic-demo.md. This demo uses the current versioned workbench; usernames are not authentication.\nStop your own instance before npm run demo:reset.\n`, { flag: 'wx' });
+      fs.writeFileSync(path.join(root, 'OPEN-DEMO.txt'), `IMAGE REVIEW BASIC DEMO\n\nFrom the repository root (PowerShell):\n$env:HOST = '127.0.0.1'\n$env:PORT = '3002'\n$env:VITE_PORT = '5174'\n$env:DATA_DIR = (Resolve-Path 'tests/.tmp/basic-demo/data').Path\nnpm run dev\n\nOpen: http://127.0.0.1:5174${manifest.image.path}\nProduction: http://127.0.0.1:3002${manifest.image.path}\n\nSee tests/manual/basic-demo.md. This demo requires account login. Run account reset for the desired demo login before manual review; see tests/manual/basic-demo.md.\nStop your own instance before npm run demo:reset.\n`, { flag: 'wx' });
       return manifest;
   });
 }

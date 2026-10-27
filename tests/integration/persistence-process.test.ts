@@ -6,7 +6,7 @@ import type { ImageDetail, AnnotationDto } from '../../src/shared/review-contrac
 
 describe('P4 real process restart', () => {
   it('restores original bytes, edited/deleted records and creation replay history using the same DATA_DIR', async () => {
-    await withIsolatedServer(async ({ base, restart, logs }) => {
+    await withIsolatedServer(async ({ base, restart, logs, fetch }) => {
       const bytes = await imageBuffer(); const form = new FormData(); form.set('id', crypto.randomUUID()); form.set('file', new File([new Uint8Array(bytes)], 'restart.png', { type: 'image/png' }));
       const upload = await fetch(`${base}/api/images`, { method: 'POST', body: form }); expect(upload.status).toBe(201); const image = await upload.json() as { id: string };
       const values = [annotationInput(), annotationInput(), annotationInput()];

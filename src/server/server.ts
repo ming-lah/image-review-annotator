@@ -11,7 +11,7 @@ try {
   stage = 'STORAGE';
   storage = openStorage(config.dataDir);
   stage = 'LISTEN';
-  const app = createApp(storage, process.env.NODE_ENV === 'production' ? fileURLToPath(new URL('../client/', import.meta.url)) : undefined);
+  const app = createApp(storage, process.env.NODE_ENV === 'production' ? fileURLToPath(new URL('../client/', import.meta.url)) : undefined, config.auth);
   const server = app.listen(config.port, config.host);
   server.once('error', (error: NodeJS.ErrnoException) => {
     storage?.close();

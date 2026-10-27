@@ -8,7 +8,7 @@ import { createWorkingCopy } from '../../src/client/state/working-copy';
 import { createToast } from '../../src/client/state/toast';
 import type { UpdateHandlers } from '../../src/client/http/review-events';
 
-const user = { userId: crypto.randomUUID(), username: '审阅甲' };
+const user = { userId: crypto.randomUUID(), username: '审阅甲', loginName: 'review-a', role: 'admin' as const };
 const image = { id: crypto.randomUUID(), originalName: 'one.png', mimeType: 'image/png' as const, width: 32, height: 24, fileSize: 3, sha256: 'a'.repeat(64), createdAt: '2026-10-26T00:00:00.000Z', updatedAt: '2026-10-26T00:00:00.000Z' };
 const baseline: WorkspaceDetail = { image, annotations: [], revision: { id: crypto.randomUUID(), imageId: image.id, parentRevisionId: null, userId: user.userId, username: user.username, savedAt: image.createdAt, kind: 'upload', versionNumber: 0, added: 0, modified: 0, deleted: 0 } };
 const existing = { id: crypto.randomUUID(), imageId: image.id, number: 1, size: 24, x: 0.2, y: 0.3, note: '原说明', severity: 'medium' as const, createdBy: user.userId, createdByName: user.username, updatedBy: user.userId, updatedByName: user.username, version: 1, createdAt: image.createdAt, updatedAt: image.createdAt };
@@ -57,7 +57,7 @@ describe('manual working copy', () => {
     expect(await model.save(user.userId, send)).toBe(false); expect(model.blocked()).toBe(true);
     const raw = model.snapshot()!; const restored = createWorkingCopy(); restored.restore(raw, image.id);
     expect(restored.state.pending).toEqual(model.state.pending);
-    expect(await restored.save(crypto.randomUUID(), send)).toBe(true);
+    expect(await restored.save(user.userId, send)).toBe(true);
     expect(send.mock.calls[0]).toEqual(send.mock.calls[1]);
     expect(restored.state.pending).toBeNull(); expect(restored.snapshot()).toBeNull();
   });
@@ -85,16 +85,75 @@ function setup() {
   const location = { href: 'http://127.0.0.1:5174/' };
   vi.stubGlobal('location', location);
   vi.stubGlobal('window', { sessionStorage: storage(session), localStorage: storage(local), history: { replaceState: (_state: unknown, _unused: string, url: URL) => { location.href = String(url); } }, addEventListener() {}, removeEventListener() {}, confirm: () => false });
-  const api = { enter: vi.fn(async () => user), library: vi.fn(async (): Promise<Library> => ({ items: [{ image, annotationCount: 0, revisionCount: 1, username: user.username, uploadedByUserId: user.userId }], total: 1, page: 1, pageSize: 12 })), detail: vi.fn(async () => structuredClone(baseline)), content: vi.fn(async () => new File(['png'], 'one.png', { type: 'image/png' })), upload: vi.fn(async () => image), history: vi.fn(async () => ({ items: [baseline.revision], total: 1, page: 1, pageSize: 20 })), historical: vi.fn(async (): Promise<HistoryDetail> => ({ ...baseline, changes: [] })), save: vi.fn<WorkbenchApi['save']>(async () => result()) } satisfies Omit<WorkbenchApi, 'removeImage'>;
+  const api = { register: vi.fn<WorkbenchApi['register']>(async (loginName, _password, username) => { void _password; return { userId: crypto.randomUUID(), loginName, username: username || loginName, role: 'member' }; }), me: vi.fn<WorkbenchApi['me']>(async () => { throw new RequestFailure('login', 401, 'AUTH_REQUIRED'); }), logout: vi.fn(async () => {}), enter: vi.fn<WorkbenchApi['enter']>(async () => user), library: vi.fn(async (): Promise<Library> => ({ items: [{ image, annotationCount: 0, revisionCount: 1, username: user.username, uploadedByUserId: user.userId }], total: 1, page: 1, pageSize: 12 })), detail: vi.fn(async () => structuredClone(baseline)), content: vi.fn(async () => new File(['png'], 'one.png', { type: 'image/png' })), upload: vi.fn(async () => image), history: vi.fn(async () => ({ items: [baseline.revision], total: 1, page: 1, pageSize: 20 })), historical: vi.fn(async (): Promise<HistoryDetail> => ({ ...baseline, changes: [] })), save: vi.fn<WorkbenchApi['save']>(async () => result()) } satisfies Omit<WorkbenchApi, 'removeImage'>;
   const managementApi = { ...api, removeImage: vi.fn(async () => {}) };
   let controller!: ReturnType<typeof useWorkbench>;
   const app = renderer.createApp({ setup() { controller = useWorkbench({ api: managementApi, updates: handlers => { updates = handlers; return stopUpdates; }, preview: { createUrl: () => 'blob:test', revokeUrl() {}, decode: async () => ({ width: 32, height: 24 }) } }); return () => null; } });
-  mounted.push(app); app.mount({});
+  mounted.push(app); app.mount({}); controller.password = 'test-password-12345';
   return { w: controller, api: managementApi, session, local, stopUpdates, notify: () => updates?.event({ type: 'image.changed', imageId: image.id, revisionId: crypto.randomUUID() }), reconnect: () => updates?.ready(), unmount: () => app.unmount() };
 }
 describe('entry and workbench composition flow', () => {
+  it('creates a member from the entry form with an empty password and returns to login without entering', async () => {
+    const { w, api } = setup(); w.setEntryMode('register'); w.username = ' NEW '; w.registrationName = ' 昵称 '; w.password = '';
+    await w.submitEntry();
+    expect(api.register).toHaveBeenCalledWith('new', '', '昵称'); expect(api.enter).not.toHaveBeenCalled();
+    expect(w.page).toBe('entry'); expect(w.user).toBeNull(); expect(w.entryMode).toBe('login');
+    expect(w.username).toBe('new'); expect(w.password).toBe(''); expect(w.entryMessage).toBe('账号已创建，请登录');
+    w.password = ''; await w.submitEntry(); expect(api.enter).toHaveBeenCalledWith('new', ''); expect(w.page).toBe('library');
+  });
+  it('retains registration input on duplicate-name errors and validates the nickname before sending', async () => {
+    const { w, api } = setup(); w.setEntryMode('register'); w.username = 'new'; w.password = '1'; w.registrationName = 'x'.repeat(41);
+    await w.submitEntry(); expect(api.register).not.toHaveBeenCalled();
+    w.registrationName = 'nickname'; api.register.mockRejectedValueOnce(new RequestFailure('登录账号已存在', 409, 'LOGIN_NAME_EXISTS', 'duplicate-request'));
+    await w.submitEntry(); expect(w.entryMode).toBe('register'); expect(w.password).toBe('1'); expect(w.username).toBe('new');
+    expect(w.errorText).toBe('登录账号已存在'); expect(w.errorRequestId).toBe('duplicate-request');
+    w.setEntryMode('login'); expect(w.entryMode).toBe('login'); expect(w.errorText).toBe('');
+  });
+  it('does not replace an expired original identity or its frozen draft when registering another member', async () => {
+    const { w, api, session } = setup(); w.username = user.loginName; await w.enter(); await w.openImage(image.id);
+    w.place({ x: 0.2, y: 0.3 }); w.draft.markers[0].note = 'original frozen draft';
+    api.save.mockRejectedValueOnce(new RequestFailure('lost')); await w.save();
+    api.me.mockRejectedValueOnce(new RequestFailure('expired', 401, 'AUTH_REQUIRED')); await w.verifyIdentity(); await nextTick();
+    const frozen = JSON.stringify(w.draft.pending); const cached = session.get('image-review:draft:' + user.userId + ':' + image.id);
+    w.setEntryMode('register'); w.username = 'another-member'; w.registrationName = ''; w.password = '1'; await w.submitEntry();
+    expect(w.user?.userId).toBe(user.userId); expect(w.authExpired).toBe(true); expect(w.page).toBe('entry');
+    expect(JSON.stringify(w.draft.pending)).toBe(frozen); expect(session.get('image-review:draft:' + user.userId + ':' + image.id)).toBe(cached);
+    expect(api.enter).toHaveBeenCalledTimes(1); expect(api.logout).not.toHaveBeenCalled();
+  });
+  it('retains the original user draft on expiry and restores it after the same account signs in', async () => {
+    const { w, api, session } = setup(); w.username = user.loginName; await w.enter(); await w.openImage(image.id);
+    w.place({ x: 0.2, y: 0.3 }); w.draft.markers[0].note = 'private original draft'; await nextTick();
+    api.me.mockRejectedValueOnce(new RequestFailure('expired', 401, 'AUTH_REQUIRED')); await w.verifyIdentity();
+    expect(w.page).toBe('entry'); expect(w.authExpired).toBe(true); expect(w.blocked).toBe(true);
+    expect(session.get('image-review:draft:' + user.userId + ':' + image.id)).toContain('private original draft');
+    w.password = 'test-password-12345'; await w.enter(); expect(w.page).toBe('review'); expect(w.authExpired).toBe(false);
+    expect(w.draft.markers[0].note).toBe('private original draft'); expect(api.save).not.toHaveBeenCalled();
+  });
+  it('separates drafts after a shared-cookie account change and gives members no image-delete action', async () => {
+    const { w, api, session } = setup(); w.username = user.loginName; await w.enter(); await w.openImage(image.id);
+    w.place({ x: 0.2, y: 0.3 }); w.draft.markers[0].note = 'user A only'; await nextTick();
+    const other = { ...user, userId: crypto.randomUUID(), loginName: 'member-b', role: 'member' as const };
+    api.me.mockResolvedValueOnce(other); await w.verifyIdentity(); expect(w.page).toBe('entry');
+    api.enter.mockResolvedValueOnce(other); w.username = other.loginName; w.password = 'test-password-12345'; await w.enter(); await w.openImage(image.id);
+    expect(w.draft.markers).toEqual([]); expect(w.canDeleteImage).toBe(false); w.askDelete(); expect(w.deleteDialog).toBe(false);
+    expect(session.get('image-review:draft:' + user.userId + ':' + image.id)).toContain('user A only');
+    expect(session.has('image-review:draft:' + image.id)).toBe(false); expect(api.removeImage).not.toHaveBeenCalled();
+  });
+  it('requires the original account to reconcile a frozen unknown request after authentication changes', async () => {
+    const { w, api } = setup(); w.username = user.loginName; await w.enter(); await w.openImage(image.id);
+    w.place({ x: 0.2, y: 0.3 }); w.draft.markers[0].note = 'pending original';
+    api.save.mockRejectedValueOnce(new RequestFailure('connection lost')); expect(await w.save()).toBe(false);
+    const pending = JSON.parse(JSON.stringify(w.draft.pending));
+    api.me.mockRejectedValueOnce(new RequestFailure('expired', 401, 'AUTH_REQUIRED')); await w.verifyIdentity();
+    const other = { ...user, userId: crypto.randomUUID(), loginName: 'other' };
+    api.enter.mockResolvedValueOnce(other); w.username = 'other'; w.password = 'test-password-12345'; await w.enter();
+    expect(w.page).toBe('entry'); expect(api.logout).toHaveBeenCalledWith(other.userId); expect(w.draft.pending).toEqual(pending);
+    w.username = user.loginName; w.password = 'test-password-12345'; await w.enter(); expect(w.page).toBe('review');
+    await w.save(); expect(api.save.mock.calls[1][1]).toEqual(pending);
+  });
+
   it('CT reports upload successes briefly while preserving failures for retry and single-image navigation', async () => {
-    const { w, api } = setup(); w.username = user.username; await w.enter();
+    const { w, api } = setup(); w.username = user.loginName; await w.enter();
     const file = (name: string) => new File(['png'], name, { type: 'image/png' });
     api.upload.mockRejectedValueOnce(new RequestFailure('invalid', 400, 'IMAGE_INVALID'));
     await w.uploadFiles([file('bad.png'), file('ok.png')]);
@@ -107,14 +166,14 @@ describe('entry and workbench composition flow', () => {
   });
   it.each([false, true])('BV restores an unknown single-marker request before suggesting merge (remote advanced: %s)', async advanced => {
     const { w, api, session } = setup(); const start = { ...baseline, annotations: [existing] };
-    api.detail.mockResolvedValue(structuredClone(start)); w.username = user.username; await w.enter(); await w.openImage(image.id);
+    api.detail.mockResolvedValue(structuredClone(start)); w.username = user.loginName; await w.enter(); await w.openImage(image.id);
     w.draft.markers[0].note = 'pending target'; w.place({ x: 0.8, y: 0.8 });
     const emptyId = w.draft.selectedId!;
     api.save.mockRejectedValueOnce(new RequestFailure('lost'));
     expect(await w.saveMarker(existing.id)).toBe(false); await nextTick();
-    const pending = JSON.parse(JSON.stringify(api.save.mock.calls[0][1])); const raw = session.get('image-review:draft:' + image.id)!;
+    const pending = JSON.parse(JSON.stringify(api.save.mock.calls[0][1])); const raw = session.get('image-review:draft:' + user.userId + ':' + image.id)!;
     // Simulate the existing tab opening its cached working copy against the current server state.
-    w.copy.bind(start); await nextTick(); session.set('image-review:draft:' + image.id, raw);
+    w.copy.bind(start); await nextTick(); session.set('image-review:draft:' + user.userId + ':' + image.id, raw);
     const latest = advanced ? { ...start, revision: { ...start.revision, id: crypto.randomUUID(), versionNumber: 2 } } : start;
     api.detail.mockResolvedValue(structuredClone(latest));
     await w.toLibrary(); await w.openImage(image.id);
@@ -129,7 +188,7 @@ describe('entry and workbench composition flow', () => {
     expect(w.draft.pending).toBeNull(); expect(w.updateMessage).toContain('请核对最新版本');
   });
   it('P5 switches between independent images through discard protection and restores only the matching view and cache', async () => {
-    const { w, api, session } = setup(); w.username = user.username; await w.enter(); await w.openImage(image.id);
+    const { w, api, session } = setup(); w.username = user.loginName; await w.enter(); await w.openImage(image.id);
     const otherId = crypto.randomUUID(); const other = { ...baseline, image: { ...image, id: otherId, originalName: 'two.png' }, revision: { ...baseline.revision, id: crypto.randomUUID(), imageId: otherId } };
     w.place({ x: 0.8, y: 0.1 }); w.draft.markers[0].note = 'discard A'; await nextTick();
     w.saveView({ mode: 'manual', manualScale: 2, markerSize: 24, anchor: { x: 0.3, y: 0.4 } });
@@ -137,25 +196,25 @@ describe('entry and workbench composition flow', () => {
     await w.openImage(otherId); expect(w.dialog).toBe(true); expect(w.currentImage?.id).toBe(image.id);
     await w.resolveLeave('discard'); expect(w.currentImage?.id).toBe(otherId); expect(w.draft.markers).toEqual([]);
     w.place({ x: 0.1, y: 0.9 }); w.draft.markers[0].note = 'B only'; await nextTick();
-    expect(session.get('image-review:draft:' + otherId)).toContain('B only');
+    expect(session.get('image-review:draft:' + user.userId + ':' + otherId)).toContain('B only');
     await w.toLibrary(); await w.resolveLeave('discard'); await w.openImage(image.id);
     expect(w.draft.markers).toEqual([]); expect(w.currentImage?.id).toBe(image.id);
-    expect(session.get('image-review:view:' + image.id)).toContain('manualScale'); expect(w.historical).toBeNull();
+    expect(session.get('image-review:view:' + user.userId + ':' + image.id)).toContain('manualScale'); expect(w.historical).toBeNull();
   });
   it('P5 cancels whole-image deletion without changing input, then clears only the deleted image and clamps the library page', async () => {
-    const { w, api, session } = setup(); w.username = user.username; await w.enter(); await w.openImage(image.id);
+    const { w, api, session } = setup(); w.username = user.loginName; await w.enter(); await w.openImage(image.id);
     w.place({ x: 0.2, y: 0.4 }); w.draft.markers[0].note = 'unsaved'; await nextTick();
-    session.set('image-review:view:' + image.id, 'saved view'); session.set('image-review:draft:other', 'unrelated');
+    session.set('image-review:view:' + user.userId + ':' + image.id, 'saved view'); session.set('image-review:draft:other', 'unrelated');
     w.askDelete(); w.cancelDelete(); expect(w.draft.markers[0].note).toBe('unsaved'); expect(api.removeImage).not.toHaveBeenCalled();
     w.library.page = 2; api.library.mockResolvedValueOnce({ items: [], total: 12, page: 2, pageSize: 12 });
     w.askDelete(); await w.deleteImage(); await nextTick();
     expect(api.removeImage).toHaveBeenCalledWith(image.id, { userId: user.userId, baseRevisionId: baseline.revision.id });
     expect(w.page).toBe('library'); expect(w.currentImage).toBeNull(); expect(w.image.image).toBeNull(); expect(w.copy.count()).toBe(0);
-    expect(session.has('image-review:draft:' + image.id)).toBe(false); expect(session.has('image-review:view:' + image.id)).toBe(false);
+    expect(session.has('image-review:draft:' + user.userId + ':' + image.id)).toBe(false); expect(session.has('image-review:view:' + user.userId + ':' + image.id)).toBe(false);
     expect(session.get('image-review:draft:other')).toBe('unrelated'); expect(w.library.page).toBe(1);
   });
   it('P5 retains unknown deletion input, refuses a generic 404 as proof, and confirms only IMAGE_NOT_FOUND', async () => {
-    const { w, api } = setup(); w.username = user.username; await w.enter(); await w.openImage(image.id);
+    const { w, api } = setup(); w.username = user.loginName; await w.enter(); await w.openImage(image.id);
     w.place({ x: 0.3, y: 0.3 }); w.draft.markers[0].note = 'keep me';
     api.removeImage.mockRejectedValueOnce(new RequestFailure('lost')); w.askDelete(); await w.deleteImage();
     expect(w.deletePending).not.toBeNull(); expect(w.blocked).toBe(true); await w.switchUser(); expect(w.user).toEqual(user);
@@ -165,19 +224,19 @@ describe('entry and workbench composition flow', () => {
     expect(w.deletePending).toBeNull(); expect(w.page).toBe('library');
   });
   it('P5 retries an uncertain deletion with the unchanged image, actor and base while other writes remain locked', async () => {
-    const { w, api } = setup(); w.username = user.username; await w.enter(); await w.openImage(image.id);
+    const { w, api } = setup(); w.username = user.loginName; await w.enter(); await w.openImage(image.id);
     api.removeImage.mockRejectedValueOnce(new RequestFailure('unknown')); w.askDelete(); await w.deleteImage();
     expect(await w.save()).toBe(false); await w.openImage(crypto.randomUUID()); expect(w.currentImage?.id).toBe(image.id);
     await w.deleteImage(); expect(api.removeImage.mock.calls[0]).toEqual(api.removeImage.mock.calls[1]); expect(w.page).toBe('library');
   });
   it('P5 distinguishes server deletion from a blocked browser-cache cleanup', async () => {
-    const { w } = setup(); w.username = user.username; await w.enter(); await w.openImage(image.id);
+    const { w } = setup(); w.username = user.loginName; await w.enter(); await w.openImage(image.id);
     vi.spyOn(window.sessionStorage, 'removeItem').mockImplementation(() => { throw new Error('storage denied'); });
     w.askDelete(); await w.deleteImage();
     expect(w.page).toBe('library'); expect(w.currentImage).toBeNull(); expect(w.cacheWarning).toContain('本机缓存清理失败'); expect(w.errorText).toBe('');
   });
   it('P5 keeps edits after a deletion conflict and separates completed deletion from list failure', async () => {
-    const { w, api } = setup(); w.username = user.username; await w.enter(); await w.openImage(image.id);
+    const { w, api } = setup(); w.username = user.loginName; await w.enter(); await w.openImage(image.id);
     w.place({ x: 0.3, y: 0.3 }); w.draft.markers[0].note = 'keep me';
     api.removeImage.mockRejectedValueOnce(new RequestFailure('changed', 409, 'REVIEW_BASE_CHANGED')); w.askDelete(); await w.deleteImage();
     expect(w.deletePending).toBeNull(); expect(w.deleteDialog).toBe(false); expect(w.draft.markers[0].note).toBe('keep me');
@@ -186,7 +245,7 @@ describe('entry and workbench composition flow', () => {
     expect(w.errorText).toBe(''); expect(w.libraryWarning).toContain('图片已删除');
   });
   it('P5 keeps uploads in the library for multiple files and locks identity until unknown results are resolved', async () => {
-    const { w, api } = setup(); w.username = user.username; await w.enter();
+    const { w, api } = setup(); w.username = user.loginName; await w.enter();
     const files = [new File(['png'], 'one.png', { type: 'image/png' }), new File(['png'], 'two.png', { type: 'image/png' })];
     api.upload.mockRejectedValueOnce(new RequestFailure('unknown'));
     await w.uploadFiles(files); expect(w.blocked).toBe(true); await w.switchUser(); expect(w.page).toBe('library'); expect(w.user).toEqual(user);
@@ -197,7 +256,7 @@ describe('entry and workbench composition flow', () => {
   it('shows a complete historical collection, with deletions only in optional comparison and details initially closed', async () => {
     const { w, api } = setup(); const removed = { ...existing, id: crypto.randomUUID(), number: 2, note: 'deleted' }; const survivor = { ...existing, number: 7 };
     api.historical.mockResolvedValueOnce({ ...baseline, annotations: [survivor], previousAnnotations: [removed, survivor], changes: [{ annotationId: removed.id, kind: 'delete', before: removed, after: null, userId: user.userId }] });
-    w.username = '审阅甲'; await w.enter(); await w.openImage(image.id);
+    w.username = user.loginName; await w.enter(); await w.openImage(image.id);
     w.place({ x: 0.8, y: 0.8 }); w.draft.markers[0].note = 'unsaved';
     await w.openHistory();
     expect(w.historyExpandedIds).toEqual([]); expect(w.showChanges).toBe(false);
@@ -208,7 +267,7 @@ describe('entry and workbench composition flow', () => {
     w.backToReview(); expect(w.expandedIds).toEqual([]); expect(w.draft.markers[0].note).toBe('unsaved');
   });
   it('keeps an authoritative saved library summary on retries without incrementing its counts', async () => {
-    const { w, api } = setup(); w.username = '审阅甲'; await w.enter(); await w.openImage(image.id);
+    const { w, api } = setup(); w.username = user.loginName; await w.enter(); await w.openImage(image.id);
     const saved = result(); saved.libraryItem = { ...w.library.items[0], annotationCount: 1, revisionCount: 2 };
     api.save.mockRejectedValueOnce(new RequestFailure('unknown')).mockResolvedValueOnce(saved);
     api.library.mockRejectedValueOnce(new RequestFailure('list unavailable', 503));
@@ -220,7 +279,7 @@ describe('entry and workbench composition flow', () => {
     expect(api.save.mock.calls[0]).toEqual(api.save.mock.calls[1]);
   });
   it('keeps search controls unlocked and ignores stale library responses', async () => {
-    const { w, api } = setup(); w.username = '审阅甲'; await w.enter();
+    const { w, api } = setup(); w.username = user.loginName; await w.enter();
     let finish!: (value: typeof w.library) => void;
     api.library.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
     w.query = 'first'; const earlier = w.loadLibrary();
@@ -233,14 +292,14 @@ describe('entry and workbench composition flow', () => {
     const { w, api } = setup();
     const rows = [1, 3, 7].map(number => ({ ...existing, id: crypto.randomUUID(), number }));
     api.detail.mockResolvedValueOnce({ ...baseline, annotations: rows });
-    w.username = '审阅甲'; await w.enter(); await w.openImage(image.id);
+    w.username = user.loginName; await w.enter(); await w.openImage(image.id);
     w.copy.remove(rows[1].id);
     expect(w.stageMarkers.map(row => [row.id, row.label])).toEqual([[rows[0].id, 1], [rows[2].id, 2]]);
     w.copy.restoreRemoved(rows[1].id);
     expect(w.stageMarkers.map(row => row.label)).toEqual([1, 2, 3]);
   });
   it('BC-WB-003 updates the cached rail immediately after a successful save even if library refresh fails', async () => {
-    const { w, api } = setup(); w.username = '审阅甲'; await w.enter(); await w.openImage(image.id);
+    const { w, api } = setup(); w.username = user.loginName; await w.enter(); await w.openImage(image.id);
     w.place({ x: 0.2, y: 0.2 }); w.draft.markers[0].note = 'saved';
     api.library.mockRejectedValueOnce(new RequestFailure('list failed', 503));
     expect(await w.save()).toBe(true);
@@ -251,7 +310,7 @@ describe('entry and workbench composition flow', () => {
   it('starts exclusively at username entry, enters the library, opens a saved image and returns through dirty protection', async () => {
     const { w, api } = setup(); expect(w.page).toBe('entry'); expect(api.library).not.toHaveBeenCalled();
     w.username = ' '; await w.enter(); expect(w.page).toBe('entry'); expect(api.enter).not.toHaveBeenCalled();
-    w.username = '审阅甲'; await w.enter(); expect(w.page).toBe('library'); expect(w.user).toEqual(user);
+    w.username = user.loginName; await w.enter(); expect(w.page).toBe('library'); expect(w.user).toEqual(user);
     await w.openImage(image.id); expect(w.page).toBe('review');
     w.place({ x: 0.3, y: 0.3 }); w.draft.markers[0].note = 'draft';
     await w.toLibrary(); expect(w.dialog).toBe(true); expect(w.page).toBe('review');
@@ -261,23 +320,23 @@ describe('entry and workbench composition flow', () => {
     await w.resolveLeave('save'); expect(w.page).toBe('library'); expect(w.dialog).toBe(false); expect(api.save).toHaveBeenCalledTimes(2);
   });
   it('views inherited history without overwriting the working copy, supports independent disclosure and returns to entry on user switch', async () => {
-    const { w, api } = setup(); w.username = '审阅甲'; await w.enter(); await w.openImage(image.id);
+    const { w, api } = setup(); w.username = user.loginName; await w.enter(); await w.openImage(image.id);
     w.place({ x: 0.2, y: 0.2 }); w.draft.markers[0].note = 'first'; w.place({ x: 0.8, y: 0.8 }); w.draft.markers[1].note = 'second';
     expect(w.expandedIds).toHaveLength(2);
     await w.openHistory(); expect(w.page).toBe('history'); expect(w.draft.markers).toHaveLength(2); expect(w.stageMarkers).toHaveLength(0);
     w.backToReview(); expect(w.page).toBe('review'); expect(w.stageMarkers).toHaveLength(2);
     await w.switchUser(); expect(w.dialog).toBe(true); await w.resolveLeave('discard'); expect(w.page).toBe('entry'); expect(w.user).toBeNull();
-    w.username = '另一位使用人'; await w.enter(); expect(api.enter.mock.calls[1]).toEqual(['另一位使用人', undefined]);
+    w.username = 'review-b'; w.password = 'test-password-12345'; await w.enter(); expect(api.enter.mock.calls[1]).toEqual(['review-b', 'test-password-12345']);
   });
   it('preserves refresh data per image and never navigates away while a save result remains unknown', async () => {
-    const { w, api, session } = setup(); w.username = '审阅甲'; await w.enter(); await w.openImage(image.id);
+    const { w, api, session } = setup(); w.username = user.loginName; await w.enter(); await w.openImage(image.id);
     w.place({ x: 0.2, y: 0.3 }); w.draft.markers[0].note = 'cached';
     api.save.mockRejectedValueOnce(new RequestFailure('unknown'));
     expect(await w.save()).toBe(false); await nextTick();
-    expect(session.get('image-review:draft:' + image.id)).toContain('cached');
+    expect(session.get('image-review:draft:' + user.userId + ':' + image.id)).toContain('cached');
     await w.toLibrary(); expect(w.page).toBe('review'); expect(w.dialog).toBe(false);
     expect(await w.save()).toBe(true); expect(api.save.mock.calls[0]).toEqual(api.save.mock.calls[1]);
-    await nextTick(); expect(session.has('image-review:draft:' + image.id)).toBe(false);
+    await nextTick(); expect(session.has('image-review:draft:' + user.userId + ':' + image.id)).toBe(false);
   });
 });
 
@@ -290,7 +349,7 @@ describe('window fixes and per-marker saving composition', () => {
     expect(await w.saveMarker(target.id)).toBe(true);
     expect(api.save.mock.calls[0][1].markers.map(row => row.id)).toEqual([target.id]);
     expect(w.expandedIds).toEqual([otherId]); expect(w.draft.markers[1].note).toBe(''); expect(w.copy.count()).toBe(1);
-    await nextTick(); expect(session.get('image-review:draft:' + image.id)).toContain(otherId);
+    await nextTick(); expect(session.get('image-review:draft:' + user.userId + ':' + image.id)).toContain(otherId);
     w.copy.undo(otherId); expect(w.copy.count()).toBe(0); expect(w.draft.markers[0].id).toBe(target.id);
   });
   it('uses the original single-point request when the global confirm button retries an unknown save', async () => {
@@ -336,7 +395,7 @@ describe('P6 review and notification composition', () => {
     await w.reload(); expect(w.merge?.conflicts).toEqual([]); expect(w.draft.markers).toHaveLength(1);
     w.applyMerge(); await nextTick(); expect(api.save).not.toHaveBeenCalled();
     expect(w.draft.markers.map(row => row.id)).toEqual([existing.id, ownId]); expect(w.copy.count()).toBe(1);
-    const cached = JSON.parse(session.get('image-review:draft:' + image.id)!); expect(cached.base.revision.id).toBe(latest.revision.id);
+    const cached = JSON.parse(session.get('image-review:draft:' + user.userId + ':' + image.id)!); expect(cached.base.revision.id).toBe(latest.revision.id);
   });
   it('recreates an edited marker only with a new ID after remote deletion, and preserves pending local deletions after rebase', async () => {
     const { w, api } = setup(); api.detail.mockResolvedValueOnce({ ...baseline, annotations: [existing] });

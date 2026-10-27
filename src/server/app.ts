@@ -10,8 +10,11 @@ import { ApiFailure } from './http/errors.js';
 import { reviewRoutes } from './http/review-routes.js';
 import { workbenchRoutes } from './http/workbench-routes.js';
 import { createReviewEvents } from './http/review-events.js';
+import { authRepository } from './persistence/auth.js';
+import { createAuth, currentUser, requestToken } from './http/auth.js';
+import { readAuthConfig, type AuthOptions } from './config.js';
 
-export function createApp(storage: Pick<Storage, 'checkReady'> & Partial<Pick<Storage, 'db' | 'files'>>, clientDir?: string) {
+export function createApp(storage: Pick<Storage, 'checkReady'> & Partial<Pick<Storage, 'db' | 'files'>>, clientDir?: string, authOptions: AuthOptions = readAuthConfig({})) {
   const app = express();
   const events = createReviewEvents();
   app.locals.closeReviewEvents = events.close;
@@ -37,7 +40,15 @@ export function createApp(storage: Pick<Storage, 'checkReady'> & Partial<Pick<St
     catch { fail(res, 503, 'SERVICE_NOT_READY', '存储暂不可用，请稍后重试'); }
   });
   if (storage.db && storage.files) {
-    app.get('/api/events', (_req, res) => { storage.checkReady(); events.connect(res); });
+    const accounts = authRepository(storage.db);
+    const auth = createAuth(accounts, authOptions);
+    app.use('/api/auth', auth.router);
+    app.post('/api/workbench/users/enter', () => { throw new ApiFailure(410, 'LOGIN_REQUIRED', '昵称入口已停用，请使用账号和密码登录'); });
+    app.use('/api', auth.guard);
+    app.get('/api/events', (req, res) => {
+      storage.checkReady(); const token = requestToken(req); const userId = currentUser(res).userId;
+      events.connect(res, () => accounts.current(token)?.userId === userId);
+    });
     app.use('/api/workbench', workbenchRoutes(storage as Storage, events));
   }
   app.use('/api', express.json({ limit: '32kb' }));

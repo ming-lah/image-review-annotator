@@ -13,6 +13,15 @@ function setup(send = vi.fn(async (id: string, _file: File, _user: string) => { 
 afterEach(() => queues.splice(0).forEach(queue => queue.dispose()));
 
 describe('P5 sequential upload queue', () => {
+  it('pauses subsequent uploads after auth failure and only resumes retries for the original account', async () => {
+    const { queue, send, settled } = setup();
+    send.mockRejectedValueOnce(new RequestFailure('expired', 401, 'AUTH_REQUIRED'));
+    await queue.start([file('first.png'), file('waiting.png')], 'original');
+    expect(send).toHaveBeenCalledTimes(1); expect(queue.state.paused).toBe(true); expect(settled).not.toHaveBeenCalled();
+    const original = send.mock.calls[0]; queue.resume('other'); await queue.retry(queue.state.items[0].id); expect(send).toHaveBeenCalledTimes(1);
+    queue.resume('original'); await queue.retry(queue.state.items[0].id);
+    expect(send.mock.calls[1]).toEqual(original); expect(send).toHaveBeenCalledTimes(3);
+  });
   it('summarizes progress and only actionable issues without dropping frozen files or successful items', async () => {
     const { queue, send } = setup();
     send.mockResolvedValueOnce(image('first')).mockRejectedValueOnce(new RequestFailure('invalid', 400, 'IMAGE_INVALID')).mockRejectedValueOnce(new RequestFailure('lost'));

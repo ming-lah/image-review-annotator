@@ -30,7 +30,7 @@ describe('saving one marker while preserving other drafts', () => {
     const send = vi.fn().mockRejectedValueOnce(new RequestFailure('lost')).mockResolvedValueOnce(saved(detail([{ ...a, note: 'target' }])));
     expect(await copy.save(userId, send, a.id)).toBe(false);
     const restored = createWorkingCopy(); restored.restore(copy.snapshot()!, imageId); expect(restored.state.pendingMarkerId).toBe(a.id);
-    expect(await restored.save(crypto.randomUUID(), send, restored.state.markers[1].id)).toBe(true); expect(send.mock.calls[0]).toEqual(send.mock.calls[1]); expect(restored.state.markers[1].note).toBe(''); expect(restored.count()).toBe(1);
+    expect(await restored.save(userId, send, restored.state.markers[1].id)).toBe(true); expect(send.mock.calls[0]).toEqual(send.mock.calls[1]); expect(restored.state.markers[1].note).toBe(''); expect(restored.count()).toBe(1);
   });
   it('uses the precise saved revision on a late receipt and retains the frozen request if that read fails', async () => {
     const a = marker('a'); const b = marker('b'); const copy = createWorkingCopy(); copy.bind(detail([a, b])); copy.state.markers[0].note = 'target'; copy.state.markers[1].note = 'my other edit';

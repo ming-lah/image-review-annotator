@@ -1,17 +1,17 @@
 import { describe, it, expect } from 'vitest';
-import request from 'supertest';
+import { authenticatedRequest as request, setTestUser } from '../support/auth-fixtures.js';
 import { randomUUID, createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { createApp } from '../../src/server/app.js';
+import { createTestApp as createApp } from '../support/auth-fixtures.js';
 import { openStorage } from '../../src/server/storage.js';
-import type { SaveReview, WorkspaceDetail, User } from '../../src/shared/workbench-contracts.js';
+import type { SaveReview, WorkspaceDetail } from '../../src/shared/workbench-contracts.js';
 import { tempDir } from '../support/helpers.js';
 import { imageBuffer } from '../support/review-fixtures.js';
 
 async function setup() {
   const root = tempDir(); const storage = openStorage(root); const app = createApp(storage);
-  const user = (await request(app).post('/api/workbench/users/enter').send({ username: '甲' }).expect(200)).body as User;
+  const user = setTestUser(app, '甲');
   const bytes = await imageBuffer(); const imageId = randomUUID();
   await request(app).post('/api/images').set('X-User-Id', user.userId).field('id', imageId).attach('file', bytes, { filename: '测试.png', contentType: 'image/png' }).expect(201);
   const detail = () => request(app).get(`/api/workbench/images/${imageId}`).expect(200);
@@ -88,7 +88,7 @@ describe('username, library and inherited manual saves', () => {
     } finally { old.close(); }
     const upgraded = openStorage(root);
     try {
-      const app = createApp(upgraded);
+      const app = createApp(upgraded); setTestUser(app, '旧用户', userId);
       for (const name of names) expect(upgraded.db.prepare('SELECT checksum FROM schema_migrations WHERE name=?').get(name)).toEqual({ checksum: createHash('sha256').update(fs.readFileSync(path.join(migrations, name))).digest('hex') });
       const detail = (await request(app).get(`/api/workbench/images/${imageId}`).expect(200)).body as WorkspaceDetail;
       expect(detail.revision.versionNumber).toBe(1); expect(detail.annotations[0].size).toBe(24);
@@ -129,7 +129,7 @@ describe('username, library and inherited manual saves', () => {
       expect(initial.revision).toMatchObject({ parentRevisionId: null, userId: s.user.userId, username: '甲', kind: 'upload' });
       const a = marker('first'); const b = marker('inherited'); const c = marker('delete');
       const first = (await s.save({ requestId: randomUUID(), userId: s.user.userId, baseRevisionId: initial.revision.id, markers: [a, b, c] }).expect(200)).body.detail as WorkspaceDetail;
-      const renamed = (await request(s.app).post('/api/workbench/users/enter').send({ userId: s.user.userId, username: '新昵称' }).expect(200)).body as User;
+      const renamed = setTestUser(s.app, '新昵称', s.user.userId);
       expect(renamed.userId).toBe(s.user.userId);
       const d = marker('added');
       const second = (await s.save({ requestId: randomUUID(), userId: renamed.userId, baseRevisionId: first.revision.id, markers: [{ ...a, note: ' changed ' }, b, d] }).expect(200)).body.detail as WorkspaceDetail;
@@ -176,11 +176,11 @@ describe('username, library and inherited manual saves', () => {
   it('validates identity, unique markers and immutable coordinates without leaking invalid input', async () => {
     const s = await setup();
     try {
-      await request(s.app).post('/api/workbench/users/enter').send({ username: ' ' }).expect(400);
+      await request(s.app).post('/api/workbench/users/enter').send({ username: ' ' }).expect(410);
       const initial = (await s.detail()).body as WorkspaceDetail; const a = marker();
       const value = { requestId: randomUUID(), userId: s.user.userId, baseRevisionId: initial.revision.id, markers: [a] };
       await s.save({ ...value, markers: [a, a] }).expect(400);
-      await s.save({ ...value, userId: randomUUID() }).expect(400);
+      await s.save({ ...value, userId: randomUUID() }).expect(403);
       const saved = (await s.save(value).expect(200)).body.detail as WorkspaceDetail;
       await s.save({ ...value, requestId: randomUUID(), baseRevisionId: saved.revision.id, markers: [{ ...a, x: 0.9 }] }).expect(400);
       await request(s.app).get(`/api/workbench/images/${randomUUID()}/history/${saved.revision.id}`).expect(404);

@@ -87,23 +87,59 @@ watch(() => w.deleteDialog, async value => {
     >
       <form
         class="entry-card"
-        @submit.prevent="w.enter"
+        @submit.prevent="w.submitEntry"
       >
         <h2 id="entry-title">
-          开始一次审阅
+          {{ w.entryMode === 'register' ? '创建普通账号' : '开始一次审阅' }}
         </h2>
         <div class="entry-field">
-          <label for="username">Username / 昵称</label><input
+          <label for="username">登录账号</label><input
             id="username"
             v-model="w.username"
             class="entry-input"
             maxlength="40"
-            autocomplete="nickname"
+            autocomplete="username"
             autofocus
             :disabled="w.busy"
             required
           >
         </div>
+        <div
+          v-if="w.entryMode === 'register'"
+          class="entry-field"
+        >
+          <label for="registration-name">昵称（可选）</label>
+          <input
+            id="registration-name"
+            v-model="w.registrationName"
+            class="entry-input"
+            maxlength="40"
+            autocomplete="nickname"
+            placeholder="不填则使用登录账号"
+            :disabled="w.busy"
+          >
+        </div>
+        <div class="entry-field">
+          <label for="password">密码</label>
+          <input
+            id="password"
+            v-model="w.password"
+            class="entry-input"
+            type="password"
+            :autocomplete="w.entryMode === 'register' ? 'new-password' : 'current-password'"
+            :disabled="w.busy"
+          >
+        </div>
+        <p class="tiny">
+          {{ w.entryMode === 'register' ? '创建的账号为普通成员，可共同审阅图片。管理员由维护人在后台创建。' : '没有账号可创建普通账号。密码不限制长度与复杂度，可留空。' }}
+        </p>
+        <p
+          v-if="w.entryMessage"
+          class="success"
+          role="status"
+        >
+          {{ w.entryMessage }}
+        </p>
         <p
           v-if="w.errorText"
           class="error inline-error"
@@ -115,7 +151,15 @@ watch(() => w.deleteDialog, async value => {
           type="submit"
           :disabled="w.busy"
         >
-          {{ w.busy ? '正在进入…' : '进入工作台 →' }}
+          {{ w.busy ? '正在处理…' : w.entryMode === 'register' ? '创建普通账号' : '进入工作台 →' }}
+        </button>
+        <button
+          class="btn subtle entry-submit"
+          type="button"
+          :disabled="w.busy"
+          @click="w.setEntryMode(w.entryMode === 'login' ? 'register' : 'login')"
+        >
+          {{ w.entryMode === 'login' ? '创建普通账号' : '已有账号，返回登录' }}
         </button>
       </form>
     </section>
@@ -139,18 +183,20 @@ watch(() => w.deleteDialog, async value => {
       </div><div class="grow" />
       <details class="user-menu">
         <summary class="user">
-          <span class="avatar">{{ avatar }}</span><span><span class="tiny">当前 username </span>{{ w.user?.username }}</span><span class="chevron">⌄</span>
+          <span class="avatar">{{ avatar }}</span><span><span class="tiny">当前用户 </span>{{ w.user?.username }}</span><span class="chevron">⌄</span>
         </summary><div class="user-dropdown">
           <p class="tiny">
             当前操作人
           </p><p class="wrap">
             {{ w.user?.username }}
+          </p><p class="tiny">
+            {{ w.user?.loginName }} · {{ w.user?.role === 'admin' ? '管理员' : '成员' }}
           </p><button
             class="btn"
             :disabled="w.blocked"
             @click="w.switchUser"
           >
-            切换 username
+            退出登录
           </button>
         </div>
       </details>
@@ -424,6 +470,7 @@ watch(() => w.deleteDialog, async value => {
         <div class="review-actions">
           <template v-if="w.page === 'review'">
             <button
+              v-if="w.canDeleteImage"
               class="btn subtle danger"
               :disabled="w.blocked || w.remoteGone"
               @click="w.askDelete"

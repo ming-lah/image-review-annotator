@@ -7,11 +7,17 @@ import { observeReviewUpdates, type UpdateHandlers } from '../../src/client/http
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 function response(write: (chunk: string) => boolean = () => true) {
   const emitter = new EventEmitter();
-  const value = Object.assign(emitter, { status: vi.fn(() => value), set: vi.fn(() => value), write: vi.fn(write), destroy: vi.fn(() => { emitter.emit('close'); return value; }) });
+  const value = Object.assign(emitter, { status: vi.fn(() => value), set: vi.fn(() => value), write: vi.fn(write), end: vi.fn(() => { emitter.emit('close'); return value; }), destroy: vi.fn(() => { emitter.emit('close'); return value; }) });
   return value as unknown as Response & { write: ReturnType<typeof vi.fn>; destroy: ReturnType<typeof vi.fn> };
 }
 const event = { type: 'image.changed' as const, imageId: crypto.randomUUID(), revisionId: crypto.randomUUID() };
 describe('bounded update stream lifecycle', () => {
+  it('closes an expired or revoked authenticated stream by the next heartbeat and releases its timer', () => {
+    vi.useFakeTimers(); const hub = createReviewEvents(); const client = response(); const authorized = vi.fn(() => true);
+    hub.connect(client, authorized); authorized.mockReturnValue(false); vi.advanceTimersByTime(15000);
+    expect(client.write).toHaveBeenCalledWith('event: auth.required\ndata: {}\n\n'); expect(vi.getTimerCount()).toBe(0);
+    const count = client.write.mock.calls.length; hub.publish(event); expect(client.write).toHaveBeenCalledTimes(count);
+  });
   it('disconnects a slow client without delaying another client and clears heartbeats on shutdown', () => {
     vi.useFakeTimers(); const hub = createReviewEvents(); const fast = response(); const slow = response(chunk => chunk.startsWith(':'));
     hub.connect(fast); hub.connect(slow); expect(vi.getTimerCount()).toBe(2);
@@ -29,6 +35,17 @@ describe('bounded update stream lifecycle', () => {
 });
 
 describe('EventSource adapter validation and cleanup', () => {
+  it('stops automatic reconnect when the server revokes authentication', () => {
+    let revoked: (() => void) | undefined;
+    class Source {
+      static instance: Source; close = vi.fn();
+      constructor() { Source.instance = this; }
+      addEventListener(name: string, callback: () => void) { if (name === 'auth.required') revoked = callback; }
+    }
+    vi.stubGlobal('EventSource', Source);
+    const handlers = { event: vi.fn(), ready: vi.fn(), status: vi.fn(), authRequired: vi.fn() };
+    observeReviewUpdates(handlers); revoked!(); expect(Source.instance.close).toHaveBeenCalledOnce(); expect(handlers.authRequired).toHaveBeenCalledOnce();
+  });
   it('resynchronizes every open, validates messages and ignores all callbacks after close', () => {
     const handlers: UpdateHandlers = { event: vi.fn(), ready: vi.fn(), status: vi.fn() };
     class Source {

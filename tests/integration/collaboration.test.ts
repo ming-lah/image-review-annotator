@@ -1,19 +1,23 @@
 import { describe, expect, it } from 'vitest';
-import { withIsolatedServer } from '../support/isolated-server.js';
+import { withIsolatedServer, type ServerFixture } from '../support/isolated-server.js';
 import { readReviewEvents } from '../support/review-event-stream.js';
 import { imageBuffer } from '../support/review-fixtures.js';
 import { planReviewMerge, resolveReviewMerge } from '../../src/client/state/review-merge.js';
 import { createWorkingCopy } from '../../src/client/state/working-copy.js';
 import { RequestFailure } from '../../src/client/http/review-api.js';
-import { saveResultSchema, workspaceDetailSchema, userSchema, type SaveReview, type WorkspaceDetail } from '../../src/shared/workbench-contracts.js';
+import { saveResultSchema, workspaceDetailSchema, type SaveReview, type WorkspaceDetail } from '../../src/shared/workbench-contracts.js';
 
 const marker = (note: string) => ({ id: crypto.randomUUID(), x: 0.2, y: 0.3, note, severity: 'medium' as const, size: 24 });
-async function setup(base: string) {
-  const post = (route: string, body: unknown, method = 'POST') => fetch(base + route, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  const enter = async (username: string) => userSchema.parse(await (await post('/api/workbench/users/enter', { username })).json());
-  const a = await enter('A'); const b = await enter('B'); const imageId = crypto.randomUUID();
+async function setup(base: string, fetch: typeof globalThis.fetch, signIn: ServerFixture['signIn']) {
+  const ca = await signIn('A'); const cb = await signIn('B'); const a = ca.user; const b = cb.user;
+  const post = (route: string, body: unknown, method = 'POST') => {
+    const identity = body as { userId?: string; actorId?: string };
+    const client = (identity.userId ?? identity.actorId) === b.userId ? cb : ca;
+    return client.fetch(base + route, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  };
+  const imageId = crypto.randomUUID();
   const form = new FormData(); form.set('id', imageId); form.set('file', new File([new Uint8Array(await imageBuffer())], 'same.png', { type: 'image/png' }));
-  const upload = () => fetch(base + '/api/images', { method: 'POST', body: form, headers: { 'X-User-Id': a.userId } });
+  const upload = () => ca.fetch(base + '/api/images', { method: 'POST', body: form, headers: { 'X-User-Id': a.userId } });
   expect((await upload()).status).toBe(201);
   const detail = async () => workspaceDetailSchema.parse(await (await fetch(`${base}/api/workbench/images/${imageId}`)).json());
   const save = (payload: SaveReview) => post(`/api/workbench/images/${imageId}/saves`, payload);
@@ -23,8 +27,8 @@ async function setup(base: string) {
 
 describe('multi-client review transactions and update events', () => {
   it('persists one marker per version, restores unrelated drafts, and leaves formal edits/deletions untouched until save-all', async () => {
-    await withIsolatedServer(async ({ base }) => {
-      const s = await setup(base); const a = marker('a'); const b = marker('b'); const c = marker('c'); const initial = await s.detail();
+    await withIsolatedServer(async ({ base, fetch, signIn }) => {
+      const s = await setup(base, fetch, signIn); const a = marker('a'); const b = marker('b'); const c = marker('c'); const initial = await s.detail();
       const formal = saveResultSchema.parse(await (await s.save({ requestId: crypto.randomUUID(), userId: s.a.userId, baseRevisionId: initial.revision.id, markers: [a, b, c] })).json()).detail;
       const copy = createWorkingCopy(); copy.bind(formal); copy.state.markers[0].note = 'target edit'; copy.state.markers[1].note = 'other edit'; copy.remove(c.id); copy.place({ x: 0.8, y: 0.8 });
       const send = async (_id: string, payload: SaveReview) => { const res = await s.save(payload); const body = await res.json(); if (!res.ok) throw new RequestFailure(body.error.message, res.status, body.error.code); return saveResultSchema.parse(body); };
@@ -36,8 +40,8 @@ describe('multi-client review transactions and update events', () => {
     });
   });
   it('saves separate same-name images independently with the correct authors', async () => {
-    await withIsolatedServer(async ({ base }) => {
-      const one = await setup(base); const two = await setup(base); const before = await Promise.all([one.detail(), two.detail()]);
+    await withIsolatedServer(async ({ base, fetch, signIn }) => {
+      const one = await setup(base, fetch, signIn); const two = await setup(base, fetch, signIn); const before = await Promise.all([one.detail(), two.detail()]);
       const results = await Promise.all([one.save({ requestId: crypto.randomUUID(), userId: one.a.userId, baseRevisionId: before[0].revision.id, markers: [marker('one')] }), two.save({ requestId: crypto.randomUUID(), userId: two.b.userId, baseRevisionId: before[1].revision.id, markers: [marker('two')] })]);
       expect(results.map(row => row.status)).toEqual([200, 200]); const details = await Promise.all([one.detail(), two.detail()]);
       expect(details.map(row => row.annotations[0].note)).toEqual(['one', 'two']); expect(details.map(row => row.revision.userId)).toEqual([one.a.userId, two.b.userId]);
@@ -45,8 +49,8 @@ describe('multi-client review transactions and update events', () => {
     });
   });
   it('allows exactly one same-base commit, then merges independent additions; a third write still invalidates a reviewed base', async () => {
-    await withIsolatedServer(async ({ base, restart }) => {
-      const s = await setup(base); const initial = await s.detail(); const ma = marker('A new'); const mb = marker('B new');
+    await withIsolatedServer(async ({ base, restart, fetch, signIn }) => {
+      const s = await setup(base, fetch, signIn); const initial = await s.detail(); const ma = marker('A new'); const mb = marker('B new');
       const payloads = [s.a, s.b].map((user, index) => ({ requestId: crypto.randomUUID(), userId: user.userId, baseRevisionId: initial.revision.id, markers: [index ? mb : ma] }));
       const results = await Promise.all(payloads.map(s.save)); expect(results.map(row => row.status).sort()).toEqual([200, 409]);
       const winner = results[0].status === 200 ? 0 : 1; const loser = 1 - winner;
@@ -65,8 +69,8 @@ describe('multi-client review transactions and update events', () => {
     });
   });
   it('confirms lost-response saves before checking their old base, even after another user saves', async () => {
-    await withIsolatedServer(async ({ base }) => {
-      const s = await setup(base); const first = await s.detail(); const a = marker('first');
+    await withIsolatedServer(async ({ base, fetch, signIn }) => {
+      const s = await setup(base, fetch, signIn); const first = await s.detail(); const a = marker('first');
       const payload = { requestId: crypto.randomUUID(), userId: s.a.userId, baseRevisionId: first.revision.id, markers: [a] };
       const original = saveResultSchema.parse(await (await s.save(payload)).json());
       const later = saveResultSchema.parse(await (await s.save({ ...payload, requestId: crypto.randomUUID(), userId: s.b.userId, baseRevisionId: original.savedRevisionId, markers: [{ ...a, note: 'later' }] })).json());
@@ -77,8 +81,8 @@ describe('multi-client review transactions and update events', () => {
     });
   });
   it('serializes save/delete races and never resurrects an original or mixes same-name images', async () => {
-    await withIsolatedServer(async ({ base }) => {
-      const s = await setup(base); const first = await s.detail();
+    await withIsolatedServer(async ({ base, fetch, signIn }) => {
+      const s = await setup(base, fetch, signIn); const first = await s.detail();
       const results = await Promise.all([s.save({ requestId: crypto.randomUUID(), userId: s.a.userId, baseRevisionId: first.revision.id, markers: [marker('racing')] }), s.remove(first.revision.id)]);
       if (results[0].status === 200) { expect(results[1].status).toBe(409); expect((await s.remove((await s.detail()).revision.id)).status).toBe(204); }
       else { expect(results[1].status).toBe(204); expect(results[0].status).toBe(404); }
@@ -89,11 +93,11 @@ describe('multi-client review transactions and update events', () => {
     });
   });
   it('streams committed uploads/saves/legacy changes/deletion, suppresses failed and duplicate saves, and reconciles after reconnect/restart', async () => {
-    await withIsolatedServer(async ({ base, restart }) => {
-      const stream = await readReviewEvents(base);
+    await withIsolatedServer(async ({ base, restart, fetch, signIn }) => {
+      const stream = await readReviewEvents(base, fetch);
       let s: Awaited<ReturnType<typeof setup>>;
       try {
-        s = await setup(base); const initial = await s.detail(); await stream.until(event => event.type === 'image.changed' && event.revisionId === initial.revision.id);
+        s = await setup(base, fetch, signIn); const initial = await s.detail(); await stream.until(event => event.type === 'image.changed' && event.revisionId === initial.revision.id);
         expect((await s.upload()).status).toBe(200);
         const row = marker('first'); const payload = { requestId: crypto.randomUUID(), userId: s.a.userId, baseRevisionId: initial.revision.id, markers: [row] };
         const saved = saveResultSchema.parse(await (await s.save(payload)).json());
@@ -112,7 +116,7 @@ describe('multi-client review transactions and update events', () => {
       } finally { await stream.close(); }
       // Changes can be missed while disconnected: the database snapshot, not event replay, is authoritative.
       const before = await s!.detail(); await s!.save({ requestId: crypto.randomUUID(), userId: s!.a.userId, baseRevisionId: before.revision.id, markers: [] });
-      await restart(); const reconnected = await readReviewEvents(base);
+      await restart(); const reconnected = await readReviewEvents(base, fetch);
       try {
         const current: WorkspaceDetail = await s!.detail(); expect(current.annotations).toEqual([]); expect(current.revision.id).not.toBe(before.revision.id);
         expect((await s!.remove(current.revision.id)).status).toBe(204);

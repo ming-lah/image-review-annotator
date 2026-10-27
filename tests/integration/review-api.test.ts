@@ -1,17 +1,17 @@
 import { describe, it, expect } from 'vitest';
-import request from 'supertest';
+import { authenticatedRequest as request, setTestUser } from '../support/auth-fixtures.js';
 import { randomUUID, createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import Database from 'better-sqlite3';
 import sharp from 'sharp';
-import { createApp } from '../../src/server/app.js';
+import { createTestApp as createApp } from '../support/auth-fixtures.js';
 import { openStorage } from '../../src/server/storage.js';
 import { tempDir } from '../support/helpers.js';
 import { actor, animatedPng, annotationInput, imageBuffer, uploadImage } from '../support/review-fixtures.js';
 
 function setup() { const root = tempDir(); const storage = openStorage(root); return { root, storage, app: createApp(storage) }; }
-function failure(response: request.Response, code: string) {
+function failure(response: import('supertest').Response, code: string) {
   expect(response.body.error.code).toBe(code);
   expect(response.body.error.requestId).toBe(response.headers['x-request-id']);
   expect(JSON.stringify(response.body)).not.toMatch(/SELECT|INSERT|sqlite|Error:|[A-Z]:\\|stack|storage_key/);
@@ -65,8 +65,10 @@ describe('P4 persistence API', () => {
       expect(original.body).toMatchObject({ number: 1, note: '标记说明', version: 1, createdByName: actor.actorName });
       await request(app).post(`/api/images/${image}/annotations`).send(value).expect(200);
       failure(await request(app).post(`/api/images/${image}/annotations`).send({ ...value, note: 'different' }).expect(409), 'ANNOTATION_ID_CONFLICT');
+      setTestUser(app, '新昵称', actor.actorId);
       const updated = await request(app).patch(`/api/annotations/${value.id}`).send({ ...actor, actorName: '新昵称', version: 1, note: '已修改', severity: 'high' }).expect(200);
       expect(updated.body).toMatchObject({ version: 2, createdByName: actor.actorName, updatedByName: '新昵称', severity: 'high' });
+      setTestUser(app, actor.actorName, actor.actorId);
       expect((await request(app).post(`/api/images/${image}/annotations`).send(value).expect(200)).body.version).toBe(2);
       failure(await request(app).patch(`/api/annotations/${value.id}`).send({ ...actor, version: 1, note: '不能覆盖', severity: 'low' }).expect(409), 'ANNOTATION_VERSION_CONFLICT');
       failure(await request(app).delete(`/api/annotations/${value.id}`).send({ ...actor, version: 1 }).expect(409), 'ANNOTATION_VERSION_CONFLICT');
@@ -81,15 +83,17 @@ describe('P4 persistence API', () => {
     const { storage, app } = setup();
     try {
       const id = (await uploadImage(app, await imageBuffer()).expect(201)).body.id as string;
-      for (const [extra, code] of [[{ note: '  ' }, 'ANNOTATION_NOTE_INVALID'], [{ note: '中'.repeat(2001) }, 'ANNOTATION_NOTE_INVALID'], [{ x: -0.01 }, 'ANNOTATION_COORDINATE_OUT_OF_RANGE'], [{ y: 1.1 }, 'ANNOTATION_COORDINATE_OUT_OF_RANGE'], [{ actorName: 'x'.repeat(41) }, 'ACTOR_INVALID'], [{ severity: 'critical' }, 'INVALID_REQUEST'], [{ number: 7 }, 'INVALID_REQUEST']] as const) {
+      for (const [extra, code] of [[{ note: '  ' }, 'ANNOTATION_NOTE_INVALID'], [{ note: '中'.repeat(2001) }, 'ANNOTATION_NOTE_INVALID'], [{ x: -0.01 }, 'ANNOTATION_COORDINATE_OUT_OF_RANGE'], [{ y: 1.1 }, 'ANNOTATION_COORDINATE_OUT_OF_RANGE'], [{ severity: 'critical' }, 'INVALID_REQUEST'], [{ number: 7 }, 'INVALID_REQUEST']] as const) {
         failure(await request(app).post(`/api/images/${id}/annotations`).send(annotationInput(extra)).expect(400), code);
       }
       storage.db.exec("CREATE TRIGGER deny_creation BEFORE INSERT ON annotation_creations BEGIN SELECT RAISE(ABORT, 'test failure'); END");
       await request(app).post(`/api/images/${id}/annotations`).send(annotationInput()).expect(500);
       expect(storage.db.prepare('SELECT * FROM annotations').all()).toEqual([]);
       storage.db.exec('DROP TRIGGER deny_creation');
+      setTestUser(app, '人'.repeat(40), actor.actorId);
       const result = await request(app).post(`/api/images/${id}/annotations`).send(annotationInput({ x: 0, y: 1, note: '😀'.repeat(1000), actorName: '人'.repeat(40) })).expect(201);
       expect(result.body.number).toBe(1);
+      setTestUser(app, actor.actorName, actor.actorId);
       failure(await request(app).patch(`/api/annotations/${result.body.id}`).send({ ...actor, note: 'a', severity: 'low', version: 1, x: 0.2 }).expect(400), 'INVALID_REQUEST');
     } finally { storage.close(); }
   });
