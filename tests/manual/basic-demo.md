@@ -2,6 +2,8 @@
 
 本文件只说明测试材料与生命周期，不再维护D1–D12阶段用例。当前待验收见 [current.md](current.md)，后续回归见 [regression.md](regression.md)。
 
+最近初始化：2026-10-27，按用户授权执行已有demo:reset，恢复16个样本、固定原图和5条正式标记；API样本校验、原图字节及重启一致性通过。basic-demo以外的人工数据保留；该结果不代替M5活动实例拒绝重置的人工验收。
+
 ## 准备与启动
 
 仓库根目录使用Node 24.x。首次运行 `npm run demo:prepare`；已有非空包会报DEMO_ALREADY_EXISTS，保留数据，不要为启动重复生成。样本位于tests/.tmp/basic-demo/fixtures，manifest.json记录实际哈希、尺寸与预期错误；data保存演示原图/数据库，OPEN-DEMO.txt提供入口。
