@@ -1,15 +1,15 @@
 # 手动样本与演示数据
 
-本文件只说明测试材料与生命周期，不再维护D1–D12阶段用例。当前待验收见 [current.md](current.md)，后续回归见 [regression.md](regression.md)。
+本文件只维护固定样本与生命周期。图文演示与运行总说明在SUBMISSION；完整人工回归及验收记录见[regression.md](regression.md)。2026-10-28用户确认现有全部人工回归完成。
 
-最近初始化：2026-10-27，按用户授权执行已有demo:reset，恢复16个样本、固定原图和5条正式标记；API样本校验、原图字节及重启一致性通过。basic-demo以外的人工数据保留；该结果不代替M5活动实例拒绝重置的人工验收。
+最近初始化：2026-10-27，按用户授权执行已有demo:reset，恢复16个样本、固定原图和5条正式标记；API样本校验、原图字节及重启一致性通过。basic-demo以外的人工数据保留；该段为当时自动验证记录；当前人工验收以regression.md记录的用户完整确认更新。
 
 ## 准备与启动
 
 仓库根目录使用Node 24.x。首次运行 `npm run demo:prepare`；已有非空包会报DEMO_ALREADY_EXISTS，保留数据，不要为启动重复生成。样本位于tests/.tmp/basic-demo/fixtures，manifest.json记录实际哈希、尺寸与预期错误；data保存演示原图/数据库，OPEN-DEMO.txt提供入口。
 
 ```powershell
-Set-Location D:\Projects\image-review-annotator
+# Run from the repository root
 npm run demo:prepare
 $env:HOST = '127.0.0.1'
 $env:PORT = '3002'
@@ -41,6 +41,6 @@ npm run dev
 
 ## 重置与清理
 
-`npm run demo:reset`会放弃该演示包的人工修改，只有明确需要恢复固定场景且自己的实例已停止时才执行。活动数据库/WAL/SHM会触发保守拒绝，不直接删这些文件绕过保护。生命周期人工检查为current.md的M5；生成器及归属/越界/活动数据保护由integration/basic-demo.test.ts维护。
+`npm run demo:reset`会放弃该演示包的人工修改，只有明确需要恢复固定场景且自己的实例已停止时才执行。活动数据库/WAL/SHM会触发保守拒绝，不直接删这些文件绕过保护。生命周期人工检查为regression.md的G15；生成器及归属/越界/活动数据保护由integration/basic-demo.test.ts维护。
 
-包默认保留。确需删除时核对根目录、绝对目标tests/.tmp/basic-demo、归属标识及无联接，确认对应实例已停；只删除该包，不递归删除整个tests/.tmp，也不清理manual-workbench或全局浏览器数据。一般手动数据清理示例见current.md。
+包默认保留。确需删除时核对根目录、绝对目标tests/.tmp/basic-demo、归属标识及无联接，确认对应实例已停；只删除该包，不递归删除整个tests/.tmp，也不清理manual-workbench或全局浏览器数据。一般手动数据清理示例见[回归手册](regression.md#结束清理与反馈)。

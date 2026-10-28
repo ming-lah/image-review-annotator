@@ -1,89 +1,41 @@
 # Image Review Annotator
 
-本地图片审阅工作台：上传图片，在图上标注问题、保存版本，并与同一服务的其他使用者核对修改。使用独立账号登录；共享图库和标记，管理员额外可以删除整张图片。默认仅本机访问。
+本地图片审阅工具：上传图片、打点写说明、显式保存、查看历史，并与同一服务的同事核对修改。
 
-## 安装与启动
+**先看 [SUBMISSION.md](SUBMISSION.md)**：需求、产品规则、安装配置、设计、实际页面截图、操作步骤、失败复现、验证结果与AI协作，集中在这一份说明中。
 
-需要 Node.js 24.x，在项目根目录执行：
+## 运行
+
+需要Node.js 24.x，在仓库根目录执行：
 
 ```bash
 npm ci
 npm run dev
 ```
 
-打开 [http://127.0.0.1:5174](http://127.0.0.1:5174)，点击“创建普通账号”注册成员，然后登录。开发前端通过 `/api` 代理到 3002；在启动终端按 `Ctrl+C` 停止本次实例。后端源码修改后需重启自己的实例。
+打开 **http://127.0.0.1:5174**，创建普通账号、登录并上传图片。可直接上传仓库内`docs/assets/submission/sample-poster.png`复现提交说明中的案例。开发后端固定3002、前端5174，端口占用会明确报错。
 
-普通成员直接在页面注册，昵称可选，留空使用登录账号。密码不设长度或复杂度要求，空密码也可使用；注册后返回登录页，不自动切换已有会话。管理员仍由维护人在服务器交互终端执行 `npm run account -- init admin "管理员"` 创建，密码隐藏输入并确认，没有默认密码。已有数据升级前先停止自己的服务并备份整个 DATA_DIR；历史图片和作者快照保留，旧昵称缓存不能恢复登录。
-
-使用生产构建时：
+生产运行：
 
 ```bash
 npm run build
 npm run start
 ```
 
-打开 [http://127.0.0.1:3002](http://127.0.0.1:3002)，页面与 API 由同一服务提供。端口冲突会明确报错，不会自动换端口或停止其他应用。
+打开 **http://127.0.0.1:3002**。默认只监听本机；账号、独立DATA_DIR、演示数据、管理员创建与备份方法见[提交说明的运行章节](SUBMISSION.md#二安装与运行)。只停止自己启动的实例。
 
-| 环境变量 | 默认值与用途 |
+## 目录与维护入口
+
+| 位置 | 用途 |
 |---|---|
-| `HOST` | `127.0.0.1`；显式修改才监听其他网卡 |
-| `PORT` | `3002`；开发代理随之调整 |
-| `VITE_PORT` | `5174`；开发页面端口 |
-| `APP_ORIGIN` | 可选精确访问来源，如 `https://review.example.com`，不带尾部 `/`；非本机监听必须显式配置 HTTPS 来源 |
-| `DATA_DIR` | 绝对路径；未设置时使用系统应用数据目录，详见[数据与存储](docs/design.md#数据与存储) |
+| [SUBMISSION.md](SUBMISSION.md) | 完整交付说明，需求/设计/图文案例/失败证据的主入口 |
+| src/client/、src/server/、src/shared/ | Vue前端、Node后端、共享schema与类型 |
+| migrations/、scripts/ | 正式SQL迁移与运行/构建脚本 |
+| [tests/README.md](tests/README.md) | 自动化命令、覆盖范围与维护导航 |
+| [tests/manual/regression.md](tests/manual/regression.md) | 完整G1–G47回归集合、验收记录与隔离数据清理 |
+| [tests/manual/basic-demo.md](tests/manual/basic-demo.md) | 固定演示样本与准备/重置规则 |
+| [docs/development.md](docs/development.md) | 开发流程与源码职责 |
+| docs/assets/submission/ | 提交说明正式截图与样例海报 |
+| workspace/、tests/.tmp/、dist/ | Git忽略的本地spec、隔离测试产物、构建输出 |
 
-例如 PowerShell 中为本次手动练习指定隔离目录：
-
-```powershell
-$env:DATA_DIR = Join-Path (Get-Location) 'tests/.tmp/manual-workbench/data'
-npm run account -- init admin "测试管理员"
-npm run dev
-```
-
-命令在项目根目录运行。该环境变量对当前 PowerShell 会话中的后续启动也生效；结束后可执行 `Remove-Item Env:DATA_DIR` 恢复默认设置。隔离数据的保留和清理方法见[手动验收准备](tests/manual/current.md#准备与运行)。
-
-## 基本使用
-
-1. 在页面注册普通账号并登录，或使用已有账号登录，选择 1–10 张静态 PNG、JPEG 或 WebP 上传。单张成功后进入图片，多张成功后留在图库；图库支持搜索、排序、分页和网格/列表切换。
-2. 图片默认处于“鼠标”模式：拖动浏览、滚轮缩放，标记只读。切换到“打点”模式，在图片内点击以新增标记，填写说明、严重程度和大小。
-3. 点编辑区的“保存”只保存当前点；顶部“保存全部修改”提交全部有效改动。离开、切图或退出登录时，按提示处理尚未保存的草稿。
-4. 选择“查看历史”浏览每次有效保存形成的完整版本和变化；历史只读。仅管理员可以删除整图，需要确认，会同时删除原图、标记和全部历史，无法撤销。
-
-管理员创建和角色提升只能在后台执行，页面注册始终为 member。下面的本机维护命令始终使用当前 DATA_DIR：`npm run account -- create alice "审阅甲"` 建立成员，`reset alice` 重置密码，`disable alice` / `enable alice` 停用或启用，`role alice admin` / `role alice member` 调整角色，`list` 查看账号。变更会撤销该账号旧会话，最后一个有效管理员不能停用或降级。生产构建也可用 `node dist/server/account-cli.js <同样参数>`。完整用法见 `npm run account -- help`；历史用户绑定见[身份与权限](docs/design.md#身份与权限)。
-
-说明为 1–2000 字符；单图不超过 20 MiB、任一边不超过 12000 像素且总像素不超过 4000 万。动画和非正常 EXIF 方向的图片会被拒绝。详细行为见[设计](docs/design.md#产品行为)。
-
-## 使用案例
-
-### 只保存一个问题，继续编辑其他问题
-
-打开一张图片，切换“打点”，分别新增两个点；给第一个填写说明，第二个先留空。在第一个点的编辑区点击“保存”。第一个点成为正式内容，第二个仍是草稿；补完后可单独保存或使用“保存全部修改”。要核对服务端结果，可以在同一服务的独立浏览器打开图片链接；同标签页刷新可能恢复本地草稿，不应据此判断全部已保存。正式验收步骤见 [G31](tests/manual/regression.md#窗口与当前点保存)。
-
-### 两人审阅同一张图
-
-在本机两个独立浏览器（或普通窗口和独立隐私窗口）访问同一个地址，登录两个不同账号后打开同一图片链接。双方先各自留下草稿，A 保存后，B 使用“读取最新并核对”。不同点的修改可以一并保留；同一点出现冲突时，B 选择采用的整条内容，应用核对结果后再保存。若核对期间又有人保存，需再次核对。这个流程不广播正在输入的内容，账号权限由服务端统一检查；详见 [G21–G26](tests/manual/regression.md#协作与请求恢复)。
-
-### 用固定样本练习与复现
-
-首次在项目根目录执行 `npm run demo:prepare`，然后按[演示数据说明](tests/manual/basic-demo.md#准备与启动)设置演示专用 `DATA_DIR` 并启动。打开文档中的演示图入口，可用网格图与已有标记练习打点、缩放和保存；样本还包括损坏、动画及超限文件。已有演示包无需再次准备。`npm run demo:reset` 会放弃演示包内的修改，仅在明确需要重置且自己的演示实例已停止时使用。
-
-网络中断后若保存或上传显示结果未确认，按界面提示用原请求或原文件确认；不要把未知结果当作失败或成功。完整人工用例、预期和原因见[手动回归](tests/manual/regression.md)。
-
-## 数据与备份
-
-原图和 SQLite 数据保存在 `DATA_DIR`；同标签页仅尽力恢复未保存草稿，不能代替正式保存。备份时先停止自己的服务，再复制整个数据目录；恢复前同样停服。删除图片不可撤销，恢复演练应使用隔离数据，详见[存储说明](docs/design.md#数据与存储)。
-
-## 项目与验证
-
-```text
-src/client/   Vue 页面、组件、状态和 HTTP 客户端
-src/server/   Express、SQLite 持久化、配置与启动
-src/shared/   前后端共享契约
-migrations/   正式 SQL 迁移
-scripts/      开发、构建与启动脚本
-tests/        自动测试、手动验收和隔离测试数据
-docs/         设计与开发流程
-workspace/    Git 忽略的本地 spec
-```
-
-开发验证、CI、当前结果及手动待办分别见[开发流程](docs/development.md)、[测试入口](tests/README.md)和[当前验收](tests/manual/current.md)。项目协作约束见 [AGENTS.md](AGENTS.md)；页面交互与视觉由用户手动验收。
+项目协作约束见[AGENTS.md](AGENTS.md)。完整需求与设计已合并入SUBMISSION，不再保留重复设计文档或独立待验收清单。

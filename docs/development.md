@@ -1,6 +1,6 @@
 # 开发流程与文件职责
 
-更新：2026-10-27。以[AGENTS.md](../AGENTS.md)为协作约束；本文保留当前工作流，不复制阶段路线和历史测试数量。
+更新：2026-10-28。以[AGENTS.md](../AGENTS.md)为协作约束；本文保留当前工作流，不复制阶段路线和历史测试数量。
 
 ## 记录与审批
 
@@ -8,7 +8,7 @@
 
 实现后记录实际检查和未覆盖边界；仍待用户验收的保持active，真正完成后转completed，被替代的旧方案转archive。提交代码或整理文档不等于用户验收。
 
-文档各司其职：README负责使用、启动和导航；docs/design描述当前行为、架构及限制；本文描述工作方式；tests/README维护自动覆盖与最新结果；tests/manual/current记录人工待办，regression保存唯一完整用例，basic-demo说明测试材料。
+文档各司其职：README是精简启动与导航；SUBMISSION集中需求、产品行为、设计、图文案例、失败复现与验证结论；本文只维护开发工作方式；tests/README保留自动化覆盖索引；tests/manual/regression集中完整用例、人工验收与准备/清理，basic-demo维护固定测试材料。设计正文、独立文档索引和旧current待办页已合并移除，避免同一事实多处维护。
 
 ## 文件职责
 
@@ -33,8 +33,9 @@
 | tests/unit/ | 纯逻辑、队列和无DOM状态回归 |
 | tests/integration/ | Supertest、SQLite、真实HTTP/子进程回归 |
 | tests/support/ | 隔离资源、演示生成、非法请求及生产HTTP辅助代码 |
-| tests/manual/ | current/regression/basic-demo三份当前手册 |
+| tests/manual/ | regression/basic-demo两份维护手册 |
 | tests/.tmp/ | 忽略的隔离数据库、样本和临时产物；只清理已确认本项目归属的目标 |
+| docs/assets/submission/ | 正式交付截图与可复现样例，原始临时产物仍放tests/.tmp |
 | workspace/ | 忽略的本地spec与推进索引，不存测试数据 |
 | dist/ | 构建输出，不提交 |
 
@@ -46,7 +47,7 @@
 
 自动测试只能写tests/.tmp的独立目录，必须关闭数据库/子进程并清理自己的数据。默认端口回归需3002/5174空闲，冲突时明确受阻，不停止其他应用或把现有ready冒充新进程启动成功。其他测试可显式隔离端口，生产检查需要最终构建。
 
-页面交互、视觉、原生文件选择器、焦点和显示器缩放由用户按[手动回归](../tests/manual/regression.md)验证；不使用Playwright或其他浏览器自动化。数学/无DOM状态/HTTP通过不代表页面通过。记录真实缺陷、步骤和requestId，审批后再修复范围外问题。
+页面交互、视觉、原生文件选择器、焦点和显示器缩放由用户按[手动回归](../tests/manual/regression.md)验证。2026-10-28用户已确认现有全量人工回归完成，并明确允许本次Playwright示例验证；该专项例外不引入长期浏览器套件或修改默认协作规则。数学/无DOM状态/HTTP通过不代表页面通过。记录真实缺陷、步骤和requestId，审批后再修复范围外问题。
 
 默认用户DATA_DIR、既有人工数据、其他项目及全局缓存不能作为自动测试目标。演示只用既有demo:prepare/reset并遵守归属/活动数据保护，见[演示说明](../tests/manual/basic-demo.md)。删除目标先核对绝对路径与非联接；自动审批拒绝时保留并报告，不换方式绕过。
 
